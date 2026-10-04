@@ -1,8 +1,8 @@
 import enum
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import String, Integer, Enum, DateTime
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
 
@@ -25,3 +25,9 @@ class User(Base):
     
     intentos_fallidos: Mapped[int] = mapped_column(Integer, default=0)
     bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    cuentas: Mapped[List["Account"]] = relationship(
+        "Account", 
+        back_populates="usuario", 
+        cascade="all, delete-orphan"
+    )
