@@ -9,27 +9,42 @@ from app.core.config import settings
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _truncate_password(password: str) -> str:
+    """
+    Bcrypt limita las contraseñas a 72 bytes.
+    Truncamos la cadena a 72 bytes codificados en UTF-8 para evitar ValueError.
+    """
+    if not password:
+        return ""
+    # Trunca estrictamente a 72 bytes en UTF-8 sin cortar caracteres a la mitad
+    password_bytes = password.encode("utf-8")[:72]
+    return password_bytes.decode("utf-8", errors="ignore")
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verifica una contraseña en texto plano contra su hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    safe_password = _truncate_password(plain_password)
+    return pwd_context.verify(safe_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Genera el hash bcrypt de una contraseña."""
-    return pwd_context.hash(password)
+    safe_password = _truncate_password(password)
+    return pwd_context.hash(safe_password)
 
 
 def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
     """
     Verifica un PIN numérico (4 o 6 dígitos) contra su hash.
-    Utiliza el mismo esquema seguro que las contraseñas.
     """
-    return pwd_context.verify(str(plain_pin), hashed_pin)
+    safe_pin = _truncate_password(str(plain_pin))
+    return pwd_context.verify(safe_pin, hashed_pin)
 
 
 def get_pin_hash(pin: str) -> str:
     """Genera el hash bcrypt para un PIN numérico."""
-    return pwd_context.hash(str(pin))
+    safe_pin = _truncate_password(str(pin))
+    return pwd_context.hash(safe_pin)
 
 
 def create_access_token(

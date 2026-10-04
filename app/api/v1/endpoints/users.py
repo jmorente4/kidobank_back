@@ -7,6 +7,7 @@ from app.api.deps import get_db, get_current_user, get_current_parent
 from app.core.security import get_password_hash
 from app.models.account import Account, AccountType
 from app.models.user import User, UserRole
+from app.models.qr_card import QrCard
 from app.schemas.user import UserCreate, UserResponse
 
 
@@ -91,7 +92,7 @@ def create_user(
     - **Rol NIÑO**: Requiere obligatoriamente que la petición sea realizada por un usuario con rol **PADRE**.
     - Al crear un **NIÑO**, se inicializa automáticamente su cuenta bancaria principal con saldo 0 Kidos.
     """
-    # Si se crea un NIÑO, exige permiso explicito de PADRE
+    # Si se crea un NIÑO, exige permiso explícito de PADRE
     if payload.rol == UserRole.NINO:
         if not current_user or current_user.rol != UserRole.PADRE:
             raise HTTPException(
@@ -109,19 +110,27 @@ def create_user(
         )
 
     try:
-        hashed_pwd = get_password_hash(payload.password)
+        password_or_pin = getattr(payload, "codigo_pin", None) if payload.rol == UserRole.NINO and getattr(payload, "codigo_pin", None) else payload.password
+        hashed_pwd = get_password_hash(password_or_pin)
 
         new_user = User(
             nombre=payload.nombre,
             email=payload.email,
-            hashed_password=hashed_pwd,
+            pin_hash=hashed_pwd,
             rol=payload.rol,
-            tarjeta_qr=getattr(payload, "tarjeta_qr", None),
-            codigo_pin=getattr(payload, "codigo_pin", None),
         )
 
         db.add(new_user)
         db.flush()  # Genera el ID de new_user antes del commit
+
+        # Si se proporciona una tarjeta QR inicial, se crea y se asocia al usuario
+        tarjeta_codigo = getattr(payload, "tarjeta_qr", None)
+        if tarjeta_codigo:
+            nueva_tarjeta = QrCard(
+                qr_uuid=tarjeta_codigo,  # <- Usamos qr_uuid que es el nombre correcto del campo
+                usuario_id=new_user.id
+            )
+            db.add(nueva_tarjeta)
 
         # Si el usuario creado es un NIÑO, asignarle su cuenta bancaria inicial
         if new_user.rol == UserRole.NINO:
@@ -138,7 +147,8 @@ def create_user(
 
         return new_user
 
-    except Exception:
+    except Exception as e:
+        print("ERROR REAL:", e)
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

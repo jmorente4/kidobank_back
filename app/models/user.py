@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import String, Integer, Enum, DateTime
+from sqlalchemy import String, Integer, Enum, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -23,9 +23,16 @@ class User(Base):
     avatar_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     qr_uuid: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True)
     
+    fecha_creacion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        nullable=False
+    )
+    
     intentos_fallidos: Mapped[int] = mapped_column(Integer, default=0)
     bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
+    tarjetas_qr = relationship("QrCard", back_populates="usuario", cascade="all, delete-orphan")
+    
     cuentas: Mapped[List["Account"]] = relationship(
         "Account", 
         back_populates="usuario", 
