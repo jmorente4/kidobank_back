@@ -1,5 +1,5 @@
-from typing import List, Union
-from pydantic import AnyHttpUrl, validator
+from typing import List, Optional
+from pydantic import field_validator, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,18 +7,20 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Kidobank API"
     ENVIRONMENT: str = "local"
     
-    # Base de Datos
+    # Base de Datos (obligatorios desde .env)
     POSTGRES_SERVER: str
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
-    DATABASE_URL: Union[str, None] = None
+    DATABASE_URL: Optional[str] = None
 
-    @validator("DATABASE_URL", pre=True)
-    def assemble_db_connection(cls, v: Union[str, None], values: dict) -> str:
-        if isinstance(v, str):
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_db_connection(cls, v: Optional[str], info: ValidationInfo) -> str:
+        if isinstance(v, str) and v:
             return v
+        values = info.data
         return (
             f"postgresql://{values.get('POSTGRES_USER')}:{values.get('POSTGRES_PASSWORD')}"
             f"@{values.get('POSTGRES_SERVER')}:{values.get('POSTGRES_PORT')}/{values.get('POSTGRES_DB')}"

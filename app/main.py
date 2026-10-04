@@ -1,39 +1,66 @@
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+# app/main.py
 
-from app.core.config import settings
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.v1.router import api_router
+from app.db.base import Base  # Carga todos los modelos registrados
 from app.db.session import engine
-from app.db.base import Base  # Importa Base con todos los modelos registrados
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Crear tablas en PostgreSQL al arrancar la aplicación
-    Base.metadata.create_all(bind=engine)
+    """
+    Gestión del ciclo de vida de la aplicación.
+    Crea las tablas automáticamente en la base de datos si aún no existen.
+    """
+    logger.info("🚀 Iniciando la aplicación...")
+    try:
+        logger.info("📦 Verificando y creando tablas en la base de datos...")
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ Tablas creadas/verificadas correctamente.")
+    except Exception as e:
+        logger.error(f"❌ Error al inicializar las tablas de la base de datos: {e}")
+
     yield
+
+    logger.info("🛑 Cerrando la aplicación...")
 
 
 app = FastAPI(
-    title=settings.PROJECT_NAME,
-    openapi_url="/api/v1/openapi.json" if settings.ENVIRONMENT == "local" else None,
+    title="Kidobank API",
+    description="Backend para la PWA de simulación bancaria familiar",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
-if settings.CORS_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[str(origin) for origin in settings.CORS_ORIGINS],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Configuración de CORS
+origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.get("/health", tags=["Health"])
-def health_check():
-    return {
-        "status": "ok",
-        "environment": settings.ENVIRONMENT,
-        "project": settings.PROJECT_NAME,
-    }
+@app.get("/health", tags=["Health Check"])
+async def health_check():
+    return {"status": "ok", "app_name": app.title}
+
+
+app.include_router(api_router, prefix="/api/v1")
