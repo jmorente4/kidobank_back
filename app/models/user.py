@@ -44,6 +44,11 @@ class User(Base):
         foreign_keys="MarketItem.comprador_id",
         back_populates="comprador",
     )
+    inversiones: Mapped[List["UserInvestment"]] = relationship(
+        "UserInvestment",
+        back_populates="usuario",
+        cascade="all, delete-orphan",
+    )
     
     cuentas: Mapped[List["Account"]] = relationship(
         "Account", 

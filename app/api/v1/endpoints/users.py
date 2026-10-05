@@ -99,6 +99,16 @@ def create_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Solo un usuario con rol PADRE puede crear cuentas de NIÑOS",
             )
+        if not payload.codigo_pin:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Al crear un usuario NIÑO es obligatorio establecer un PIN de cuatro dígitos",
+            )
+    elif not payload.password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Al crear un usuario PADRE es obligatorio establecer una contraseña",
+        )
 
     # Verificar que el correo no esté registrado previamente
     stmt_check = select(User).where(User.email == payload.email)
@@ -110,7 +120,7 @@ def create_user(
         )
 
     try:
-        password_or_pin = getattr(payload, "codigo_pin", None) if payload.rol == UserRole.NINO and getattr(payload, "codigo_pin", None) else payload.password
+        password_or_pin = payload.codigo_pin if payload.rol == UserRole.NINO else payload.password
         hashed_pwd = get_password_hash(password_or_pin)
 
         new_user = User(
@@ -118,6 +128,7 @@ def create_user(
             email=payload.email,
             pin_hash=hashed_pwd,
             rol=payload.rol,
+            qr_uuid=payload.tarjeta_qr if payload.rol == UserRole.NINO else None,
         )
 
         db.add(new_user)

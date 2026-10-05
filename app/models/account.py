@@ -21,6 +21,11 @@ class Account(Base):
     tipo: Mapped[AccountType] = mapped_column(Enum(AccountType), nullable=False, default=AccountType.CORRIENTE)
     saldo: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     tasa_interes: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)  # Ej: 0.05 para 5%
+    ultimo_abono_interes: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     fecha_creacion: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         default=lambda: datetime.now(timezone.utc)

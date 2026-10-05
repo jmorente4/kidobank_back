@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import accounts, auth, bonds, market, transactions, users
+from app.api.v1.endpoints import accounts, auth, bonds, economy, goals, investment, market, transactions, users
 
 api_router = APIRouter()
 
@@ -37,6 +37,27 @@ api_router.include_router(
     bonds.router,
     prefix="/bonds",
     tags=["Renta Fija (Bonos)"]
+)
+
+# Metas de ahorro
+api_router.include_router(
+    goals.router,
+    prefix="/goals",
+    tags=["Metas de Ahorro"]
+)
+
+# Inversión y bolsa temática
+api_router.include_router(
+    investment.router,
+    prefix="/investments",
+    tags=["Inversión"]
+)
+
+# Política económica e inflación
+api_router.include_router(
+    economy.router,
+    prefix="/economy",
+    tags=["Economía familiar"]
 )
 
 # Mercadillo familiar con escrow

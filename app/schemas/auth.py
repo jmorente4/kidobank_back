@@ -14,7 +14,7 @@ class ParentLoginRequest(BaseModel):
 
 
 class PinLoginRequest(BaseModel):
-    pin: str = Field(..., min_length=4, max_length=6, description="PIN numérico de 4 a 6 dígitos")
+    pin: str = Field(..., pattern=r"^\d{4}$", description="PIN numérico de cuatro dígitos")
     user_id: Optional[int] = Field(None, description="ID del usuario (para selección por avatar)")
     qr_uuid: Optional[str] = Field(None, description="UUID de la tarjeta QR escaneada")
 

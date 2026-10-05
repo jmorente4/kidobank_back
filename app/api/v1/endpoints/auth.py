@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.security import create_access_token, verify_password, verify_pin
 from app.models.user import User, UserRole
+from app.models.qr_card import QrCard
 from app.schemas.auth import (
     ParentLoginRequest,
     PinLoginRequest,
@@ -101,6 +102,13 @@ def login_pin(
     if payload.qr_uuid:
         stmt = select(User).where(User.qr_uuid == payload.qr_uuid)
         user = db.scalars(stmt).first()
+        if not user:
+            stmt = (
+                select(User)
+                .join(QrCard, QrCard.usuario_id == User.id)
+                .where(QrCard.qr_uuid == payload.qr_uuid, QrCard.activa.is_(True))
+            )
+            user = db.scalars(stmt).first()
     elif payload.user_id:
         user = db.get(User, payload.user_id)
 

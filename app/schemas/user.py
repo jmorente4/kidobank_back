@@ -13,12 +13,12 @@ class UserBase(BaseModel):
         None, max_length=255, description="Identificador único del token o tarjeta QR para el niño"
     )
     codigo_pin: Optional[str] = Field(
-        None, min_length=4, max_length=6, description="Código PIN de 4 a 6 dígitos para operaciones rápidas"
+        None, pattern=r"^\d{4}$", description="Código PIN de cuatro dígitos para acceso infantil"
     )
 
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=6, max_length=100, description="Contraseña de acceso del usuario")
+    password: Optional[str] = Field(None, min_length=6, max_length=100, description="Contraseña para cuentas de adulto")
 
 
 class UserUpdate(BaseModel):
@@ -27,7 +27,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=6, max_length=100)
     rol: Optional[UserRole] = None
     tarjeta_qr: Optional[str] = Field(None, max_length=255)
-    codigo_pin: Optional[str] = Field(None, min_length=4, max_length=6)
+    codigo_pin: Optional[str] = Field(None, pattern=r"^\d{4}$")
 
 
 class UserResponse(UserBase):

@@ -87,6 +87,12 @@ def create_account(
             detail="Solo los padres pueden crear cuentas bancarias",
         )
 
+    if account_in.tipo != AccountType.AHORRO and account_in.tasa_interes != 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo las cuentas de ahorro pueden tener una tasa de interés",
+        )
+
     # Verificar que el usuario destino exista
     target_user = db.get(User, account_in.usuario_id)
     if not target_user:
