@@ -16,6 +16,43 @@ def _add_missing_columns(engine: Engine, table: str, columns: dict[str, str]) ->
                 connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
 
+_DEFAULT_ACCOUNT_NAMES = {"CORRIENTE": "Cuenta corriente", "AHORRO": "Cuenta de ahorro", "INVERSION": "Cuenta de inversión"}
+
+
+def _ensure_account_names(engine: Engine) -> None:
+    """Add cuentas.nombre, name legacy accounts and enforce per-user unique names."""
+    if "cuentas" not in inspect(engine).get_table_names():
+        return
+    _add_missing_columns(engine, "cuentas", {"nombre": "VARCHAR(50)"})
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text("SELECT id, usuario_id, tipo, nombre FROM cuentas ORDER BY usuario_id, id")
+        ).fetchall()
+        used: dict[int, set[str]] = {}
+        for row in rows:
+            if row.nombre and row.nombre.strip():
+                used.setdefault(row.usuario_id, set()).add(row.nombre.strip().lower())
+        for row in rows:
+            if row.nombre and row.nombre.strip():
+                continue
+            base = _DEFAULT_ACCOUNT_NAMES.get(str(row.tipo).split(".")[-1], "Cuenta")
+            name, n = base, 1
+            taken = used.setdefault(row.usuario_id, set())
+            while name.lower() in taken:
+                n += 1
+                name = f"{base} {n}"
+            taken.add(name.lower())
+            connection.execute(
+                text("UPDATE cuentas SET nombre = :nombre WHERE id = :id"), {"nombre": name, "id": row.id}
+            )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_cuentas_usuario_nombre "
+                "ON cuentas (usuario_id, lower(nombre))"
+            )
+        )
+
+
 def ensure_economy_columns(engine: Engine) -> None:
     """Add columns missing from installations where create_all cannot evolve old tables."""
     _add_missing_columns(
@@ -37,6 +74,7 @@ def ensure_economy_columns(engine: Engine) -> None:
         {"tasa_anual": "FLOAT", "tasa_semanal": "FLOAT", "ultima_aplicacion": "TIMESTAMP"},
     )
     _add_missing_columns(engine, "cuentas", {"ultimo_abono_interes": "TIMESTAMP"})
+    _ensure_account_names(engine)
     _add_missing_columns(
         engine,
         "noticias_mercado",
@@ -49,7 +87,8 @@ def ensure_economy_columns(engine: Engine) -> None:
 
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
-            connection.execute(text("ALTER TYPE transactiontype ADD VALUE IF NOT EXISTS 'INVERSION'"))
+            for value in ("INVERSION", "DEPOSITO", "RETIRO", "INTERES"):
+                connection.execute(text(f"ALTER TYPE transactiontype ADD VALUE IF NOT EXISTS '{value}'"))
 
     tables = set(inspect(engine).get_table_names())
     now = datetime.now(timezone.utc).replace(tzinfo=None)

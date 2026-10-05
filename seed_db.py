@@ -47,6 +47,7 @@ def seed_data() -> None:
         # Crear Cuenta Principal para el Padre (Fondo familiar)
         cuenta_padre = Account(
             usuario_id=padre.id,
+            nombre="Cuenta corriente",
             tipo=AccountType.CORRIENTE,
             saldo=1000.0,
             tasa_interes=0.0,

@@ -1,13 +1,15 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import can_access_user, get_db, get_current_user
 from app.models.account import Account, AccountType
+from app.models.bond import Bond
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User, UserRole
-from app.schemas.account import AccountCreate, AccountResponse, TransferRequest
+from app.schemas.account import AccountCreate, AccountResponse, AccountUpdate, TransferRequest
 from app.schemas.transaction import TransactionResponse
 
 router = APIRouter()
@@ -76,6 +78,91 @@ def get_account_detail(
     return account
 
 
+@router.patch("/{account_id}", response_model=AccountResponse, summary="Renombrar una cuenta")
+def update_account(
+    account_id: int,
+    payload: AccountUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La cuenta especificada no existe")
+    owner = db.get(User, account.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para modificar esta cuenta",
+        )
+
+    duplicate = db.scalars(
+        select(Account.id).where(
+            Account.usuario_id == account.usuario_id,
+            Account.id != account.id,
+            func.lower(Account.nombre) == payload.nombre.lower(),
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe una cuenta con ese nombre para este usuario",
+        )
+
+    account.nombre = payload.nombre
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe una cuenta con ese nombre para este usuario",
+        ) from exc
+    db.refresh(account)
+    return account
+
+
+@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Eliminar una cuenta sin saldo")
+def delete_account(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Solo los padres pueden eliminar cuentas (propias o de sus hijos) y únicamente si el saldo es 0."""
+    if current_user.rol != UserRole.PADRE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los padres pueden eliminar cuentas bancarias",
+        )
+    account = db.scalars(select(Account).where(Account.id == account_id).with_for_update()).first()
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La cuenta especificada no existe")
+    owner = db.get(User, account.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para eliminar esta cuenta",
+        )
+    if account.saldo > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No se puede eliminar: la cuenta aún tiene {account.saldo:.2f} Kidos.",
+        )
+    if db.scalars(select(Bond.id).where(Bond.cuenta_origen_id == account.id)).first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede eliminar: la cuenta tiene bonos asociados.",
+        )
+    try:
+        db.delete(account)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo eliminar la cuenta",
+        ) from exc
+
+
 @router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED, summary="Crear una nueva cuenta")
 def create_account(
     account_in: AccountCreate,
@@ -110,10 +197,25 @@ def create_account(
             detail="Solo puedes crear cuentas para ti o para miembros de tu familia.",
         )
 
+    saldo_inicial = 0.0 if target_user.id == current_user.id else account_in.saldo_inicial
+
+    duplicate = db.scalars(
+        select(Account.id).where(
+            Account.usuario_id == target_user.id,
+            func.lower(Account.nombre) == account_in.nombre.lower(),
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe una cuenta con ese nombre para este usuario",
+        )
+
     new_account = Account(
         usuario_id=account_in.usuario_id,
+        nombre=account_in.nombre,
         tipo=account_in.tipo,
-        saldo=account_in.saldo_inicial,
+        saldo=saldo_inicial,
         tasa_interes=account_in.tasa_interes,
     )
 

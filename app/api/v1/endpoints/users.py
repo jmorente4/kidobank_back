@@ -2,7 +2,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.api.deps import (
 )
 from app.core.security import get_password_hash, verify_pin
 from app.models.account import Account, AccountType
+from app.models.bond import Bond
 from app.models.qr_card import QrCard
 from app.models.user import User, UserRole
 from app.schemas.qr_card import QrCardCreate, QrCardResponse, QrCardUpdate
@@ -56,6 +57,7 @@ def _create_user(payload: UserCreate, db: Session, parent_id: Optional[int] = No
         db.add(
             Account(
                 usuario_id=new_user.id,
+                nombre="Cuenta corriente",
                 tipo=AccountType.CORRIENTE,
                 saldo=0.0,
                 tasa_interes=0.0,
@@ -312,6 +314,36 @@ def update_user_card(
     db.commit()
     db.refresh(card)
     return card
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Eliminar un hijo y todos sus datos",
+)
+def delete_child(
+    user_id: int,
+    current_parent: User = Depends(get_current_parent),
+    db: Session = Depends(get_db),
+):
+    child = _get_managed_child(user_id, current_parent, db)
+    saldo_total = db.scalar(select(func.coalesce(func.sum(Account.saldo), 0.0)).where(Account.usuario_id == child.id))
+    if saldo_total > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No se puede eliminar: el hijo aún tiene {saldo_total:.2f} Kidos en sus cuentas.",
+        )
+    try:
+        db.execute(delete(Bond).where(Bond.usuario_id == child.id))
+        db.delete(child)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Error al eliminar al hijo %s", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo eliminar al usuario",
+        ) from exc
 
 
 @router.post(

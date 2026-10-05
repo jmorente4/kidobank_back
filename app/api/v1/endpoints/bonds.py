@@ -4,26 +4,97 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import can_access_user, get_db, get_current_user
+from app.api.deps import can_access_user, get_current_parent, get_db, get_current_user
 from app.models.account import Account
-from app.models.bond import Bond, BondStatus
+from app.models.bond import Bond, BondOffer, BondStatus
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User, UserRole
-from app.schemas.bond import BondCreate, BondResponse
+from app.schemas.bond import BondCreate, BondOfferCreate, BondOfferResponse, BondResponse
 
 router = APIRouter()
 
 
-@router.post("/", response_model=BondResponse, status_code=status.HTTP_201_CREATED, summary="Comprar un bono de renta fija")
+@router.post(
+    "/offers",
+    response_model=BondOfferResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Publicar una oferta de bono para los hijos (solo padres)",
+)
+def create_offer(
+    offer_in: BondOfferCreate,
+    current_parent: User = Depends(get_current_parent),
+    db: Session = Depends(get_db),
+):
+    offer = BondOffer(
+        padre_id=current_parent.id,
+        titulo=offer_in.titulo.strip(),
+        tasa_interes=offer_in.tasa_interes,
+        plazo_dias=offer_in.plazo_dias,
+        monto_minimo=offer_in.monto_minimo,
+    )
+    db.add(offer)
+    db.commit()
+    db.refresh(offer)
+    return offer
+
+
+@router.get(
+    "/offers",
+    response_model=List[BondOfferResponse],
+    summary="Listar ofertas: las propias (padre) o las activas del padre (hijo)",
+)
+def list_offers(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    stmt = select(BondOffer).order_by(BondOffer.id.desc())
+    if current_user.rol == UserRole.PADRE:
+        stmt = stmt.where(BondOffer.padre_id == current_user.id)
+    else:
+        if current_user.padre_id is None:
+            return []
+        stmt = stmt.where(BondOffer.padre_id == current_user.padre_id, BondOffer.activa.is_(True))
+    return db.scalars(stmt).all()
+
+
+@router.delete("/offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Retirar una oferta propia")
+def delete_offer(
+    offer_id: int,
+    current_parent: User = Depends(get_current_parent),
+    db: Session = Depends(get_db),
+):
+    offer = db.get(BondOffer, offer_id)
+    if offer is None or offer.padre_id != current_parent.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La oferta no existe")
+    db.delete(offer)
+    db.commit()
+
+
+@router.post("/", response_model=BondResponse, status_code=status.HTTP_201_CREATED, summary="Comprar una oferta de bono (solo hijos)")
 def create_bond(
     bond_in: BondCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Permite a un usuario (o a un padre en nombre de su hijo) comprar un bono de renta fija.
-    Se descuenta el monto invertido de la cuenta de origen seleccionada.
+    El hijo compra una oferta de renta fija publicada por su padre, pagando con una cuenta propia.
+    Las condiciones (título, tasa y plazo) las fija la oferta.
     """
+    if current_user.rol != UserRole.NINO:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los hijos pueden comprar bonos; el padre únicamente los publica",
+        )
+
+    offer = db.get(BondOffer, bond_in.oferta_id)
+    if offer is None or not offer.activa or offer.padre_id != current_user.padre_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La oferta de bono no existe")
+    if bond_in.monto_invertido < offer.monto_minimo:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"El importe mínimo de esta oferta es {offer.monto_minimo:.2f} Kidos",
+        )
+
     # 1. Obtener y bloquear la cuenta de origen para evitar race conditions
     stmt_cuenta = select(Account).where(Account.id == bond_in.cuenta_origen_id).with_for_update()
     cuenta = db.scalars(stmt_cuenta).first()
@@ -34,9 +105,8 @@ def create_bond(
             detail="La cuenta de origen especificada no existe",
         )
 
-    # 2. Validar propiedad (el dueño de la cuenta debe ser el usuario actual, o el usuario actual debe ser PADRE)
-    owner = db.get(User, cuenta.usuario_id)
-    if owner is None or not can_access_user(current_user, owner):
+    # 2. La cuenta debe ser del propio hijo
+    if cuenta.usuario_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes autorización para usar esta cuenta",
@@ -57,7 +127,7 @@ def create_bond(
             cuenta_origen_id=cuenta.id,
             cuenta_destino_id=None,
             monto=bond_in.monto_invertido,
-            concepto=f"Compra de Bono: {bond_in.titulo}",
+            concepto=f"Compra de Bono: {offer.titulo}",
             tipo="INVERSION",
             estado=TransactionStatus.COMPLETADA,
         )
@@ -65,16 +135,16 @@ def create_bond(
 
         # 5. Calcular fecha de vencimiento (compatible con SQLite y PostgreSQL)
         ahora = datetime.utcnow()
-        fecha_vencimiento = ahora + timedelta(days=bond_in.plazo_dias)
+        fecha_vencimiento = ahora + timedelta(days=offer.plazo_dias)
 
         # 6. Crear el Bono
         nuevo_bono = Bond(
             usuario_id=cuenta.usuario_id,
             cuenta_origen_id=cuenta.id,
-            titulo=bond_in.titulo,
+            titulo=offer.titulo,
             monto_invertido=bond_in.monto_invertido,
-            tasa_interes=bond_in.tasa_interes,
-            plazo_dias=bond_in.plazo_dias,
+            tasa_interes=offer.tasa_interes,
+            plazo_dias=offer.plazo_dias,
             fecha_inicio=ahora,
             fecha_vencimiento=fecha_vencimiento,
             estado=BondStatus.ACTIVO,

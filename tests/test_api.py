@@ -424,8 +424,9 @@ def test_deposito_solo_padre_y_cuenta_propia(client, padre_user):
         headers=headers,
     ).json()
     own = client.post(
-        "/api/v1/accounts/", json={"usuario_id": padre_user.id, "tipo": "CORRIENTE"}, headers=headers
+        "/api/v1/accounts/", json={"usuario_id": padre_user.id, "nombre": "Principal", "tipo": "CORRIENTE", "saldo_inicial": 999}, headers=headers
     ).json()
+    assert own["saldo"] == 0.0
     child_acc = client.get(f"/api/v1/accounts/user/{child['id']}", headers=headers).json()[0]
 
     ok = client.post("/api/v1/transactions/deposito", json={"cuenta_destino_id": own["id"], "monto": 50}, headers=headers)
@@ -442,6 +443,145 @@ def test_deposito_solo_padre_y_cuenta_propia(client, padre_user):
     pin = client.post("/api/v1/auth/login/pin", json={"user_id": child["id"], "pin": "5678"})
     child_headers = {"Authorization": f"Bearer {pin.json()['access_token']}"}
     assert client.post("/api/v1/transactions/deposito", json={"cuenta_destino_id": child_acc["id"], "monto": 5}, headers=child_headers).status_code == 403
+
+
+def test_nombre_de_cuenta_unico_por_usuario(client, padre_user):
+    res = client.post("/api/v1/auth/login/parent", json={"email": "padre.test@kidobank.com", "password": "padre123"})
+    headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+    child = client.post(
+        "/api/v1/users/",
+        json={"nombre": "Leo", "email": "leo.nom@kidobank.com", "password": "password123", "rol": "NINO", "codigo_pin": "5678"},
+        headers=headers,
+    ).json()
+
+    def create(user_id, nombre):
+        return client.post(
+            "/api/v1/accounts/", json={"usuario_id": user_id, "nombre": nombre, "tipo": "AHORRO"}, headers=headers
+        )
+
+    first = create(padre_user.id, "  Vacaciones ")
+    assert first.status_code == 201 and first.json()["nombre"] == "Vacaciones"
+    assert create(padre_user.id, "vacaciones").status_code == 409
+    assert create(child["id"], "Vacaciones").status_code == 201
+    assert create(padre_user.id, "Otra").status_code == 201
+    assert create(padre_user.id, "   ").status_code == 422
+    assert client.post(
+        "/api/v1/accounts/", json={"usuario_id": padre_user.id, "tipo": "AHORRO"}, headers=headers
+    ).status_code == 422
+    names = [a["nombre"] for a in client.get(f"/api/v1/accounts/user/{child['id']}", headers=headers).json()]
+    assert sorted(names) == ["Cuenta corriente", "Vacaciones"]
+
+
+def test_eliminar_cuenta_solo_sin_saldo(client, padre_user):
+    res = client.post("/api/v1/auth/login/parent", json={"email": "padre.test@kidobank.com", "password": "padre123"})
+    headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+    child = client.post(
+        "/api/v1/users/",
+        json={"nombre": "Leo", "email": "leo.acc@kidobank.com", "password": "password123", "rol": "NINO", "codigo_pin": "5678"},
+        headers=headers,
+    ).json()
+    own = client.post(
+        "/api/v1/accounts/", json={"usuario_id": padre_user.id, "nombre": "Principal", "tipo": "CORRIENTE"}, headers=headers
+    ).json()
+    extra = client.post(
+        "/api/v1/accounts/", json={"usuario_id": padre_user.id, "nombre": "Extra", "tipo": "AHORRO"}, headers=headers
+    ).json()
+    child_acc = client.get(f"/api/v1/accounts/user/{child['id']}", headers=headers).json()[0]
+    client.post("/api/v1/transactions/deposito", json={"cuenta_destino_id": own["id"], "monto": 20}, headers=headers)
+
+    assert client.delete(f"/api/v1/accounts/{own['id']}", headers=headers).status_code == 409
+    assert client.get(f"/api/v1/accounts/{own['id']}", headers=headers).status_code == 200
+    assert client.delete(f"/api/v1/accounts/{extra['id']}").status_code == 401
+
+    pin = client.post("/api/v1/auth/login/pin", json={"user_id": child["id"], "pin": "5678"})
+    child_headers = {"Authorization": f"Bearer {pin.json()['access_token']}"}
+    assert client.delete(f"/api/v1/accounts/{child_acc['id']}", headers=child_headers).status_code == 403
+
+    client.post("/api/v1/users/", json={"nombre": "Otro", "email": "otro.acc@kidobank.com", "password": "password123", "rol": "PADRE"})
+    r = client.post("/api/v1/auth/login/parent", json={"email": "otro.acc@kidobank.com", "password": "password123"})
+    other = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    assert client.delete(f"/api/v1/accounts/{extra['id']}", headers=other).status_code == 403
+
+    assert client.delete(f"/api/v1/accounts/{extra['id']}", headers=headers).status_code == 204
+    assert client.get(f"/api/v1/accounts/{extra['id']}", headers=headers).status_code == 404
+    assert client.delete(f"/api/v1/accounts/{child_acc['id']}", headers=headers).status_code == 204
+    assert client.delete("/api/v1/accounts/99999", headers=headers).status_code == 404
+
+
+def test_renombrar_cuenta(client, padre_user):
+    res = client.post("/api/v1/auth/login/parent", json={"email": "padre.test@kidobank.com", "password": "padre123"})
+    headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+    child = client.post(
+        "/api/v1/users/",
+        json={"nombre": "Leo", "email": "leo.ren@kidobank.com", "password": "password123", "rol": "NINO", "codigo_pin": "5678"},
+        headers=headers,
+    ).json()
+    a = client.post("/api/v1/accounts/", json={"usuario_id": padre_user.id, "nombre": "A", "tipo": "AHORRO"}, headers=headers).json()
+    b = client.post("/api/v1/accounts/", json={"usuario_id": padre_user.id, "nombre": "B", "tipo": "AHORRO"}, headers=headers).json()
+    url = f"/api/v1/accounts/{a['id']}"
+
+    ok = client.patch(url, json={"nombre": " Coche "}, headers=headers)
+    assert ok.status_code == 200 and ok.json()["nombre"] == "Coche"
+    assert client.patch(url, json={"nombre": "coche"}, headers=headers).status_code == 200
+    assert client.patch(url, json={"nombre": "b"}, headers=headers).status_code == 409
+    assert client.patch(url, json={"nombre": "  "}, headers=headers).status_code == 422
+    assert client.patch(url, json={"nombre": "X"}).status_code == 401
+    assert client.patch("/api/v1/accounts/99999", json={"nombre": "X"}, headers=headers).status_code == 404
+
+    child_acc = client.get(f"/api/v1/accounts/user/{child['id']}", headers=headers).json()[0]
+    assert client.patch(f"/api/v1/accounts/{child_acc['id']}", json={"nombre": "Mi hucha"}, headers=headers).status_code == 200
+    pin = client.post("/api/v1/auth/login/pin", json={"user_id": child["id"], "pin": "5678"})
+    child_headers = {"Authorization": f"Bearer {pin.json()['access_token']}"}
+    assert client.patch(f"/api/v1/accounts/{child_acc['id']}", json={"nombre": "Hucha 2"}, headers=child_headers).status_code == 200
+    assert client.patch(url, json={"nombre": "Robo"}, headers=child_headers).status_code == 403
+
+
+def test_eliminar_hijo(client, padre_user):
+    def login(email, password):
+        res = client.post("/api/v1/auth/login/parent", json={"email": email, "password": password})
+        return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+    headers = login("padre.test@kidobank.com", "padre123")
+    own = client.post(
+        "/api/v1/accounts/", json={"usuario_id": padre_user.id, "nombre": "Principal", "tipo": "CORRIENTE"}, headers=headers
+    ).json()
+    client.post("/api/v1/transactions/deposito", json={"cuenta_destino_id": own["id"], "monto": 100}, headers=headers)
+    child = client.post(
+        "/api/v1/users/",
+        json={"nombre": "Leo", "email": "leo.del@kidobank.com", "password": "password123",
+              "rol": "NINO", "codigo_pin": "5678", "tarjeta_qr": "QR-DEL-0001"},
+        headers=headers,
+    ).json()
+    child_acc = client.get(f"/api/v1/accounts/user/{child['id']}", headers=headers).json()[0]
+    assert client.post(
+        "/api/v1/transactions/paga",
+        json={"cuenta_destino_id": child_acc["id"], "cuenta_origen_id": own["id"], "monto": 10},
+        headers=headers,
+    ).status_code == 201
+
+    client.post("/api/v1/users/", json={"nombre": "Otro", "email": "otro.del@kidobank.com", "password": "password123", "rol": "PADRE"})
+    other = login("otro.del@kidobank.com", "password123")
+    url = f"/api/v1/users/{child['id']}"
+    assert client.delete(url).status_code == 401
+    assert client.delete(url, headers=other).status_code == 403
+    assert client.delete(f"/api/v1/users/{padre_user.id}", headers=headers).status_code == 400
+
+    pin = client.post("/api/v1/auth/login/pin", json={"user_id": child["id"], "pin": "5678"})
+    assert client.delete(url, headers={"Authorization": f"Bearer {pin.json()['access_token']}"}).status_code == 403
+
+    # Con saldo no se puede eliminar; se vacía devolviéndolo al padre
+    assert client.delete(url, headers=headers).status_code == 409
+    assert client.get(url, headers=headers).status_code == 200
+    assert client.post(
+        "/api/v1/transactions/",
+        json={"cuenta_origen_id": child_acc["id"], "cuenta_destino_id": own["id"], "monto": 10, "concepto": "Devolución"},
+        headers=headers,
+    ).status_code == 201
+
+    assert client.delete(url, headers=headers).status_code == 204
+    assert client.get(url, headers=headers).status_code == 404
+    assert client.get("/api/v1/users/children", headers=headers).json() == []
+    assert client.post("/api/v1/auth/login/pin", json={"qr_uuid": "QR-DEL-0001", "pin": "5678"}).status_code in (401, 404)
 
 
 def test_migracion_asocia_hijos_legacy_solo_cuando_se_anade_la_columna():

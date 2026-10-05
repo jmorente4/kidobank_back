@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.account import AccountType
 
 
@@ -11,12 +11,34 @@ class AccountBase(BaseModel):
 
 class AccountCreate(AccountBase):
     usuario_id: int = Field(..., description="ID del usuario propietario de la cuenta")
+    nombre: str = Field(..., min_length=1, max_length=50, description="Nombre de la cuenta, único para cada usuario")
     saldo_inicial: float = Field(default=0.0, ge=0.0, description="Saldo inicial en Kidos")
+
+    @field_validator("nombre")
+    @classmethod
+    def _strip_nombre(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("El nombre de la cuenta no puede estar vacío")
+        return value
+
+
+class AccountUpdate(BaseModel):
+    nombre: str = Field(..., min_length=1, max_length=50, description="Nuevo nombre, único para cada usuario")
+
+    @field_validator("nombre")
+    @classmethod
+    def _strip_nombre(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("El nombre de la cuenta no puede estar vacío")
+        return value
 
 
 class AccountResponse(AccountBase):
     id: int
     usuario_id: int
+    nombre: str
     saldo: float
     fecha_creacion: datetime
 

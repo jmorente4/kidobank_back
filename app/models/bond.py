@@ -13,6 +13,25 @@ class BondStatus(str, enum.Enum):
     RESCATADO = "RESCATADO"    # Rescatado antes de tiempo con penalización
 
 
+class BondOffer(Base):
+    """Oferta de renta fija publicada por un padre para que sus hijos la compren."""
+
+    __tablename__ = "ofertas_bonos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    padre_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    titulo: Mapped[str] = mapped_column(String(150), nullable=False)
+    tasa_interes: Mapped[float] = mapped_column(Float, nullable=False)
+    plazo_dias: Mapped[int] = mapped_column(Integer, nullable=False)
+    monto_minimo: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    activa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
 class Bond(Base):
     __tablename__ = "bonos_renta_fija"
 

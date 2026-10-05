@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import String, Integer, Float, Enum, DateTime, ForeignKey
+from sqlalchemy import String, Integer, Float, Enum, DateTime, ForeignKey, Index, func, literal_column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -15,9 +15,11 @@ class AccountType(str, enum.Enum):
 
 class Account(Base):
     __tablename__ = "cuentas"
+    __table_args__ = (Index("uq_cuentas_usuario_nombre", "usuario_id", func.lower(literal_column("nombre")), unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     usuario_id: Mapped[int] = mapped_column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(String(50), nullable=False, default="Cuenta corriente")
     tipo: Mapped[AccountType] = mapped_column(Enum(AccountType), nullable=False, default=AccountType.CORRIENTE)
     saldo: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     tasa_interes: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)  # Ej: 0.05 para 5%

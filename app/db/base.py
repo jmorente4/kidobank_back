@@ -9,3 +9,4 @@ from app.models.economy import InflationPolicy  # noqa: F401
 from app.models.investment import InvestmentProduct, UserInvestment, MarketNews  # noqa: F401
 from app.models.market import MarketItem, EscrowTransaction  # noqa: F401
 from app.models.password_reset import PasswordResetToken  # noqa: F401
+from app.models.bond import Bond, BondOffer  # noqa: F401
