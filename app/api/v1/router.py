@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 # Asumiendo una estructura típica donde cada módulo exporta su 'router'
 # (p. ej., app/api/v1/endpoints/auth.py o app/api/v1/auth.py)
-from app.api.v1.endpoints import accounts, auth, transactions, users
+from app.api.v1.endpoints import accounts, auth, transactions, users, bonds 
 
 api_router = APIRouter()
 
@@ -32,4 +32,11 @@ api_router.include_router(
     transactions.router,
     prefix="/transactions",
     tags=["Transactions"]
+)
+
+# Renta Fija (Bonos)
+api_router.include_router(
+    bonds.router, 
+    prefix="/bonds", 
+    tags=["Renta Fija (Bonos)"]
 )
