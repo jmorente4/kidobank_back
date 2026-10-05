@@ -32,6 +32,18 @@ class User(Base):
     intentos_fallidos: Mapped[int] = mapped_column(Integer, default=0)
     bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     tarjetas_qr = relationship("QrCard", back_populates="usuario", cascade="all, delete-orphan")
+
+    items_vendidos: Mapped[List["MarketItem"]] = relationship(
+        "MarketItem",
+        foreign_keys="MarketItem.vendedor_id",
+        back_populates="vendedor",
+        cascade="all, delete-orphan",
+    )
+    items_comprados: Mapped[List["MarketItem"]] = relationship(
+        "MarketItem",
+        foreign_keys="MarketItem.comprador_id",
+        back_populates="comprador",
+    )
     
     cuentas: Mapped[List["Account"]] = relationship(
         "Account", 
