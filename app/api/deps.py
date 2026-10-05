@@ -1,15 +1,16 @@
 from datetime import datetime, timezone
-from typing import Callable, Generator, List, Union
+from typing import Callable, Generator, List, Optional, Union
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models.user import User, UserRole
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -23,10 +24,10 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+def get_optional_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
-) -> User:
+) -> Optional[User]:
     """
     Extrae y valida el JWT del header Bearer, recupera el objeto User desde la BD
     y verifica que la cuenta no esté bloqueada por intentos de PIN fallidos.
@@ -36,6 +37,9 @@ def get_current_user(
         detail="No se pudieron validar las credenciales o el token ha expirado.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if credentials is None:
+        return None
 
     token = credentials.credentials
     payload = decode_access_token(token)
@@ -48,7 +52,7 @@ def get_current_user(
 
     try:
         user_id = int(user_id_raw)
-    except ValueError:
+    except (TypeError, ValueError):
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
@@ -56,13 +60,44 @@ def get_current_user(
         raise credentials_exception
 
     # Control de bloqueo temporal por seguridad
-    if user.bloqueado_hasta and user.bloqueado_hasta > datetime.now(timezone.utc):
+    blocked_until = user.bloqueado_hasta
+    if blocked_until is not None and blocked_until.tzinfo is None:
+        blocked_until = blocked_until.replace(tzinfo=timezone.utc)
+    if blocked_until and blocked_until > datetime.now(timezone.utc):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="La cuenta se encuentra bloqueada temporalmente por seguridad."
         )
 
     return user
+
+
+def get_current_user(
+    current_user: Optional[User] = Depends(get_optional_current_user),
+) -> User:
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Se requiere autenticación.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return current_user
+
+
+def get_family_user_ids(current_user: User, db: Session) -> List[int]:
+    """IDs visible to a user: their own account and linked family members."""
+    if current_user.rol == UserRole.PADRE:
+        children = db.scalars(select(User.id).where(User.padre_id == current_user.id)).all()
+        return [current_user.id, *children]
+    return [current_user.id]
+
+
+def can_access_user(current_user: User, target_user: User) -> bool:
+    if current_user.id == target_user.id:
+        return True
+    if current_user.rol == UserRole.PADRE:
+        return target_user.padre_id == current_user.id
+    return False
 
 
 def require_role(allowed_roles: Union[UserRole, List[UserRole]]) -> Callable:

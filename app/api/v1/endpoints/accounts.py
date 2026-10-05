@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user  # <-- Importar ambos desde app.api.deps
+from app.api.deps import can_access_user, get_db, get_current_user
 from app.models.account import Account, AccountType
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.user import User, UserRole
@@ -36,7 +36,10 @@ def get_accounts_by_user_id(
     Consulta las cuentas de un usuario específico.
     Un usuario Niño solo puede consultar sus propias cuentas; los Padres pueden consultar cualquier cuenta.
     """
-    if current_user.rol != UserRole.PADRE and current_user.id != user_id:
+    target_user = db.get(User, user_id)
+    if target_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El usuario especificado no existe")
+    if not can_access_user(current_user, target_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permisos para ver las cuentas de este usuario",
@@ -63,7 +66,8 @@ def get_account_detail(
             detail="La cuenta especificada no existe",
         )
 
-    if current_user.rol != UserRole.PADRE and account.usuario_id != current_user.id:
+    owner = db.get(User, account.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para acceder a esta cuenta",
@@ -93,12 +97,17 @@ def create_account(
             detail="Solo las cuentas de ahorro pueden tener una tasa de interés",
         )
 
-    # Verificar que el usuario destino exista
+    # Verificar que la cuenta destino pertenezca al usuario autenticado o a su familia.
     target_user = db.get(User, account_in.usuario_id)
     if not target_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="El usuario especificado para la cuenta no existe",
+        )
+    if not can_access_user(current_user, target_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo puedes crear cuentas para ti o para miembros de tu familia.",
         )
 
     new_account = Account(
@@ -156,10 +165,18 @@ def transfer_kidos(
         )
 
     # Verificar que el usuario que transfiere sea el dueño de la cuenta de origen o un Padre
-    if current_user.rol != UserRole.PADRE and cuenta_origen.usuario_id != current_user.id:
+    owner_origen = db.get(User, cuenta_origen.usuario_id)
+    if owner_origen is None or not can_access_user(current_user, owner_origen):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes autorización para realizar transferencias desde esta cuenta",
+        )
+
+    owner_destino = db.get(User, cuenta_destino.usuario_id)
+    if owner_destino is None or not can_access_user(current_user, owner_destino):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes autorización para transferir a esta cuenta",
         )
 
     # Verificar fondos suficientes

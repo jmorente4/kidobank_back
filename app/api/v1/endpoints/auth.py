@@ -1,24 +1,40 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from urllib.parse import quote
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.api.deps import get_db
-from app.core.security import create_access_token, verify_password, verify_pin
+from app.core.security import create_access_token, get_password_hash, verify_password, verify_pin
+from app.models.password_reset import PasswordResetToken
 from app.models.user import User, UserRole
 from app.models.qr_card import QrCard
 from app.schemas.auth import (
     ParentLoginRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     PinLoginRequest,
     TokenResponse,
     UserAuthSummary,
 )
+from app.services.password_reset import send_password_reset_email
 
 router = APIRouter()
 
 MAX_FAILED_ATTEMPTS = 3
 LOCKOUT_MINUTES = 15
+
+
+def _locked_until(user: User) -> Optional[datetime]:
+    value = user.bloqueado_hasta
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 @router.post(
@@ -45,8 +61,9 @@ def login_parent(
 
     # Comprobar si la cuenta está bloqueada por reintento de PIN
     now_utc = datetime.now(timezone.utc)
-    if user.bloqueado_hasta and user.bloqueado_hasta > now_utc:
-        minutos_restantes = int((user.bloqueado_hasta - now_utc).total_seconds() / 60) + 1
+    blocked_until = _locked_until(user)
+    if blocked_until and blocked_until > now_utc:
+        minutos_restantes = int((blocked_until - now_utc).total_seconds() / 60) + 1
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Cuenta bloqueada temporalmente. Inténtalo de nuevo en {minutos_restantes} minuto(s).",
@@ -76,6 +93,92 @@ def login_parent(
         token_type="bearer",
         user=UserAuthSummary.model_validate(user),
     )
+
+
+@router.post(
+    "/password/forgot",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Solicitar un enlace de restablecimiento de contraseña",
+)
+def request_password_reset(
+    payload: PasswordResetRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La recuperación de contraseña no está configurada en este entorno.",
+        )
+
+    user = db.scalars(
+        select(User).where(User.email == payload.email, User.rol == UserRole.PADRE)
+    ).first()
+    if user:
+        now = datetime.now(timezone.utc)
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.usuario_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        ).update({"used_at": now}, synchronize_session=False)
+
+        raw_token = secrets.token_urlsafe(32)
+        token = PasswordResetToken(
+            usuario_id=user.id,
+            token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+            expires_at=now + timedelta(hours=1),
+        )
+        db.add(token)
+        db.commit()
+
+        separator = "&" if "?" in settings.PASSWORD_RESET_URL else "?"
+        reset_url = f"{settings.PASSWORD_RESET_URL}{separator}token={quote(raw_token)}"
+        background_tasks.add_task(
+            send_password_reset_email, user.email, reset_url
+        )
+
+    return {"message": "Si el correo corresponde a una cuenta de adulto, recibirá instrucciones."}
+
+
+@router.post(
+    "/password/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Restablecer una contraseña con un token válido",
+)
+def reset_password(
+    payload: PasswordResetConfirm,
+    db: Session = Depends(get_db),
+):
+    token_hash = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    reset_token = db.scalars(
+        select(PasswordResetToken)
+        .where(PasswordResetToken.token_hash == token_hash)
+        .with_for_update()
+    ).first()
+    now = datetime.now(timezone.utc)
+    expires_at = reset_token.expires_at if reset_token else now
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if not reset_token or reset_token.used_at is not None or expires_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El enlace de restablecimiento no es válido o ha caducado.",
+        )
+
+    user = db.get(User, reset_token.usuario_id)
+    if user is None or user.rol != UserRole.PADRE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El enlace de restablecimiento no es válido o ha caducado.",
+        )
+
+    user.pin_hash = get_password_hash(payload.new_password)
+    user.intentos_fallidos = 0
+    user.bloqueado_hasta = None
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.usuario_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": now}, synchronize_session=False)
+    db.commit()
 
 
 @router.post(
@@ -121,8 +224,9 @@ def login_pin(
     now_utc = datetime.now(timezone.utc)
 
     # Comprobar si la cuenta está bloqueada
-    if user.bloqueado_hasta and user.bloqueado_hasta > now_utc:
-        minutos_restantes = int((user.bloqueado_hasta - now_utc).total_seconds() / 60) + 1
+    blocked_until = _locked_until(user)
+    if blocked_until and blocked_until > now_utc:
+        minutos_restantes = int((blocked_until - now_utc).total_seconds() / 60) + 1
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Cuenta bloqueada por seguridad tras fallar {MAX_FAILED_ATTEMPTS} veces el PIN. Inténtalo de nuevo en {minutos_restantes} minuto(s).",

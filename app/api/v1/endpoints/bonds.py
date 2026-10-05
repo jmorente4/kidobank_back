@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import can_access_user, get_db, get_current_user
 from app.models.account import Account
 from app.models.bond import Bond, BondStatus
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
@@ -35,7 +35,8 @@ def create_bond(
         )
 
     # 2. Validar propiedad (el dueño de la cuenta debe ser el usuario actual, o el usuario actual debe ser PADRE)
-    if current_user.rol != UserRole.PADRE and cuenta.usuario_id != current_user.id:
+    owner = db.get(User, cuenta.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes autorización para usar esta cuenta",
@@ -103,14 +104,12 @@ def list_bonds(
     Lista los bonos de renta fija. Si es PADRE puede consultar los de cualquier hijo filtrando por usuario_id.
     Si es NINO, solo puede ver sus propios bonos.
     """
-    target_user_id = current_user.id
-    if current_user.rol == UserRole.PADRE and usuario_id:
-        target_user_id = usuario_id
-    elif current_user.rol == UserRole.NINO and usuario_id and usuario_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permisos para ver los bonos de otros usuarios",
-        )
+    target_user_id = usuario_id or current_user.id
+    target_user = db.get(User, target_user_id)
+    if target_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El usuario no existe")
+    if not can_access_user(current_user, target_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permisos para ver los bonos de este usuario")
 
     stmt = select(Bond).where(Bond.usuario_id == target_user_id)
     bonos = db.scalars(stmt).all()
@@ -137,7 +136,8 @@ def redeem_bond(
             detail="El bono especificado no existe",
         )
 
-    if current_user.rol != UserRole.PADRE and bono.usuario_id != current_user.id:
+    owner = db.get(User, bono.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para gestionar este bono",

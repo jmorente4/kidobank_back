@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import can_access_user, get_current_user, get_db, get_family_user_ids
 from app.models.account import Account, AccountType
 from app.models.market import EscrowStatus, EscrowTransaction, MarketItem, MarketStatus
 from app.models.user import User, UserRole
@@ -18,6 +18,11 @@ from app.schemas.market import (
 )
 
 router = APIRouter()
+
+
+def _can_access_market_party(current_user: User, user_id: int, db: Session) -> bool:
+    party = db.get(User, user_id)
+    return party is not None and can_access_user(current_user, party)
 
 
 @router.get("/items", response_model=List[MarketItemResponse], summary="Listar artículos del mercadillo")
@@ -74,7 +79,7 @@ def update_market_item(
     item = db.get(MarketItem, item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artículo no encontrado")
-    if item.vendedor_id != current_user.id and current_user.rol != UserRole.PADRE:
+    if not _can_access_market_party(current_user, item.vendedor_id, db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No puedes editar este artículo")
     if item.estado != MarketStatus.DISPONIBLE:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo puedes editar artículos disponibles")
@@ -162,7 +167,9 @@ def confirm_market_delivery(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No existe un escrow pendiente para este artículo")
 
     allowed_users = {escrow.comprador_id, escrow.vendedor_id}
-    if current_user.id not in allowed_users and current_user.rol != UserRole.PADRE:
+    if current_user.id not in allowed_users and not any(
+        _can_access_market_party(current_user, user_id, db) for user_id in allowed_users
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para confirmar la entrega")
 
     vendedor_account = (
@@ -207,7 +214,10 @@ def cancel_market_purchase(
     if not escrow:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No existe un escrow pendiente para este artículo")
 
-    if current_user.id not in {escrow.comprador_id, escrow.vendedor_id} and current_user.rol != UserRole.PADRE:
+    allowed_users = {escrow.comprador_id, escrow.vendedor_id}
+    if current_user.id not in allowed_users and not any(
+        _can_access_market_party(current_user, user_id, db) for user_id in allowed_users
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No puedes cancelar esta compra")
 
     comprador_account = (
@@ -235,12 +245,13 @@ def list_market_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.rol == UserRole.PADRE:
-        stmt = select(EscrowTransaction).order_by(EscrowTransaction.created_at.desc())
-    else:
-        stmt = (
-            select(EscrowTransaction)
-            .where((EscrowTransaction.comprador_id == current_user.id) | (EscrowTransaction.vendedor_id == current_user.id))
-            .order_by(EscrowTransaction.created_at.desc())
+    family_ids = get_family_user_ids(current_user, db)
+    stmt = (
+        select(EscrowTransaction)
+        .where(
+            EscrowTransaction.comprador_id.in_(family_ids)
+            | EscrowTransaction.vendedor_id.in_(family_ids)
         )
+        .order_by(EscrowTransaction.created_at.desc())
+    )
     return db.scalars(stmt).all()

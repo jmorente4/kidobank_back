@@ -117,3 +117,29 @@ def ensure_economy_columns(engine: Engine) -> None:
                 text("UPDATE cuentas SET ultimo_abono_interes = :now WHERE ultimo_abono_interes IS NULL"),
                 {"now": now},
             )
+
+
+def ensure_family_columns(engine: Engine) -> None:
+    """Add and, when unambiguous, populate the parent-child link on older databases."""
+    if "usuarios" not in inspect(engine).get_table_names():
+        return
+    is_new_column = "padre_id" not in {
+        column["name"] for column in inspect(engine).get_columns("usuarios")
+    }
+    _add_missing_columns(engine, "usuarios", {"padre_id": "INTEGER"})
+    with engine.begin() as connection:
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_usuarios_padre_id ON usuarios (padre_id)")
+        )
+        if is_new_column:
+            parent_ids = connection.execute(
+                text("SELECT id FROM usuarios WHERE rol = 'PADRE'")
+            ).scalars().all()
+            if len(parent_ids) == 1:
+                connection.execute(
+                    text(
+                        "UPDATE usuarios SET padre_id = :parent_id "
+                        "WHERE rol = 'NINO' AND padre_id IS NULL"
+                    ),
+                    {"parent_id": parent_ids[0]},
+                )

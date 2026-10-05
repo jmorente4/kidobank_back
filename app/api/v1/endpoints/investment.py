@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_parent, get_current_user, get_db
+from app.api.deps import can_access_user, get_current_parent, get_current_user, get_db
 from app.models.account import Account, AccountType
 from app.models.investment import InvestmentProduct, InvestmentStatus, InvestmentType, MarketNews, UserInvestment
 from app.models.transaction import Transaction, TransactionStatus, TransactionType
@@ -93,8 +93,9 @@ def buy_product(
     cuenta = db.get(Account, payload.cuenta_id)
     if not cuenta:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La cuenta no existe")
-    if cuenta.usuario_id != current_user.id and current_user.rol != UserRole.PADRE:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="La cuenta no pertenece al usuario autenticado")
+    owner = db.get(User, cuenta.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="La cuenta no pertenece al usuario autenticado ni a sus hijos")
     if cuenta.tipo != AccountType.CORRIENTE:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La inversión debe hacerse desde una cuenta corriente")
     if cuenta.saldo < payload.monto_invertido_kidos:
@@ -187,7 +188,8 @@ def sell_position(
     investment = db.get(UserInvestment, investment_id)
     if not investment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inversión no encontrada")
-    if investment.usuario_id != current_user.id and current_user.rol != UserRole.PADRE:
+    owner = db.get(User, investment.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso sobre esta inversión")
     if investment.estado != InvestmentStatus.ACTIVA:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La inversión ya no está activa")

@@ -9,9 +9,10 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.db.base import Base  # Carga todos los modelos registrados
-from app.db.compatibility import ensure_economy_columns
+from app.db.compatibility import ensure_economy_columns, ensure_family_columns
 from app.db.session import engine
 from app.services.economy_scheduler import periodic_economy_loop
+from app.core.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
         logger.info("📦 Verificando y creando tablas en la base de datos...")
         Base.metadata.create_all(bind=engine)
         ensure_economy_columns(engine)
+        ensure_family_columns(engine)
         logger.info("✅ Tablas creadas/verificadas correctamente.")
     except Exception as e:
         logger.error(f"❌ Error al inicializar las tablas de la base de datos: {e}")
@@ -57,14 +59,9 @@ app = FastAPI(
 )
 
 # Configuración de CORS
-origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

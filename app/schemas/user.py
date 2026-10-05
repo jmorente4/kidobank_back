@@ -30,8 +30,21 @@ class UserUpdate(BaseModel):
     codigo_pin: Optional[str] = Field(None, pattern=r"^\d{4}$")
 
 
+class UserProfileUpdate(BaseModel):
+    nombre: Optional[str] = Field(None, min_length=2, max_length=100)
+    email: Optional[EmailStr] = None
+
+
+class PinChange(BaseModel):
+    pin_nuevo: str = Field(..., pattern=r"^\d{4}$", description="Nuevo PIN de cuatro dígitos")
+    pin_actual: Optional[str] = Field(
+        None, pattern=r"^\d{4}$", description="PIN actual; obligatorio si lo cambia el propio niño"
+    )
+
+
 class UserResponse(UserBase):
     id: int
+    padre_id: Optional[int] = None
     fecha_creacion: datetime
 
     model_config = ConfigDict(from_attributes=True)

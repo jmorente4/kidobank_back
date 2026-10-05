@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_parent, get_current_user, get_db
+from app.api.deps import can_access_user, get_current_parent, get_current_user, get_db
 from app.models.account import Account, AccountType
 from app.models.bond import Bond, BondStatus
 from app.models.economy import InflationPolicy, InflationPolicyStatus
@@ -91,6 +91,9 @@ def update_savings_rate(
     account = db.get(Account, account_id)
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cuenta no encontrada")
+    owner = db.get(User, account.usuario_id)
+    if owner is None or not can_access_user(current_parent, owner):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permisos para configurar esta cuenta")
     if account.tipo != AccountType.AHORRO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tasa periódica solo se configura en cuentas de ahorro")
 
@@ -169,8 +172,9 @@ def user_wealth_summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user.rol != UserRole.PADRE and current_user.id != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para ver este patrimonio")
-    if not db.get(User, user_id):
+    target_user = db.get(User, user_id)
+    if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El usuario no existe")
+    if not can_access_user(current_user, target_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para ver este patrimonio")
     return _build_wealth_summary(user_id, db)

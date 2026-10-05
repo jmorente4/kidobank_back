@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import String, Integer, Enum, DateTime, func
+from sqlalchemy import String, Integer, Enum, DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -20,6 +20,9 @@ class User(Base):
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
     pin_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     rol: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False, default=UserRole.NINO)
+    padre_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     avatar_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     qr_uuid: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True)
     
@@ -55,3 +58,7 @@ class User(Base):
         back_populates="usuario", 
         cascade="all, delete-orphan"
     )
+    padre: Mapped[Optional["User"]] = relationship(
+        "User", remote_side="User.id", back_populates="hijos"
+    )
+    hijos: Mapped[List["User"]] = relationship("User", back_populates="padre")
