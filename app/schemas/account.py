@@ -40,7 +40,13 @@ class AccountResponse(AccountBase):
     usuario_id: int
     nombre: str
     saldo: float
-    fecha_creacion: datetime
+    valor_bonos: Optional[float] = Field(None, description="Solo en cuentas de inversión: valor de los bonos activos")
+    valor_inversiones: Optional[float] = Field(
+        None, description="Solo en cuentas de inversión: valor de mercado de las posiciones activas"
+    )
+    patrimonio_total: Optional[float] = Field(
+        None, description="Solo en cuentas de inversión: saldo + bonos + inversiones"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

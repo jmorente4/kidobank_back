@@ -141,3 +141,40 @@ def test_ofertas_aisladas_por_familia_y_retirables(client, padre_user, db):
         headers=child_headers,
     )
     assert buy.status_code == 404
+
+
+def test_patrimonio_de_cuenta_de_inversion(client, padre_user, db):
+    from app.models.investment import InvestmentProduct, InvestmentType, UserInvestment
+
+    headers = _parent_headers(client)
+    child_id, cuenta_id, child_headers = _create_child(client, db, headers, "hijo7@kidobank.com", saldo=300.0)
+    inv = client.post(
+        "/api/v1/accounts/", json={"usuario_id": child_id, "nombre": "Mis inversiones", "tipo": "INVERSION", "saldo_inicial": 50},
+        headers=headers,
+    ).json()
+    assert inv["patrimonio_total"] == 50.0 and inv["valor_bonos"] == 0.0
+
+    offer_id = _create_offer(client, headers).json()["id"]
+    client.post(
+        "/api/v1/bonds/",
+        json={"oferta_id": offer_id, "cuenta_origen_id": cuenta_id, "monto_invertido": 100.0},
+        headers=child_headers,
+    )
+    product = InvestmentProduct(
+        nombre="Indice", codigo="IDX1", tipo=InvestmentType.INDICE, precio_actual_kidos=12.0, precio_base=10.0
+    )
+    db.add(product)
+    db.flush()
+    db.add(UserInvestment(usuario_id=child_id, producto_id=product.id, monto_invertido_kidos=100.0, participaciones=10.0))
+    db.commit()
+
+    cuentas = client.get("/api/v1/accounts/me", headers=child_headers).json()
+    by_type = {c["tipo"]: c for c in cuentas}
+    assert by_type["CORRIENTE"]["patrimonio_total"] is None
+    inversion = by_type["INVERSION"]
+    assert inversion["valor_inversiones"] == 120.0  # 10 participaciones x 12 Kidos
+    assert 100.0 <= inversion["valor_bonos"] < 100.5  # capital + interés devengado hasta ahora
+    assert inversion["patrimonio_total"] == round(50.0 + inversion["valor_bonos"] + 120.0, 2)
+
+    detalle = client.get(f"/api/v1/accounts/{inv['id']}", headers=headers).json()
+    assert detalle["patrimonio_total"] == inversion["patrimonio_total"]

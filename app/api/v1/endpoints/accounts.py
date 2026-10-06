@@ -11,6 +11,7 @@ from app.models.transaction import Transaction, TransactionType, TransactionStat
 from app.models.user import User, UserRole
 from app.schemas.account import AccountCreate, AccountResponse, AccountUpdate, TransferRequest
 from app.schemas.transaction import TransactionResponse
+from app.services.patrimonio import account_to_response
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ def get_my_accounts(
     """
     stmt = select(Account).where(Account.usuario_id == current_user.id)
     accounts = db.scalars(stmt).all()
-    return accounts
+    return [account_to_response(db, a) for a in accounts]
 
 
 @router.get("/user/{user_id}", response_model=List[AccountResponse], summary="Obtener cuentas de un usuario")
@@ -49,7 +50,7 @@ def get_accounts_by_user_id(
 
     stmt = select(Account).where(Account.usuario_id == user_id)
     accounts = db.scalars(stmt).all()
-    return accounts
+    return [account_to_response(db, a) for a in accounts]
 
 
 @router.get("/{account_id}", response_model=AccountResponse, summary="Obtener detalle de una cuenta por ID")
@@ -75,7 +76,7 @@ def get_account_detail(
             detail="No tienes permiso para acceder a esta cuenta",
         )
 
-    return account
+    return account_to_response(db, account)
 
 
 @router.patch("/{account_id}", response_model=AccountResponse, summary="Renombrar una cuenta")
@@ -118,7 +119,7 @@ def update_account(
             detail="Ya existe una cuenta con ese nombre para este usuario",
         ) from exc
     db.refresh(account)
-    return account
+    return account_to_response(db, account)
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Eliminar una cuenta sin saldo")
@@ -222,7 +223,7 @@ def create_account(
     db.add(new_account)
     db.commit()
     db.refresh(new_account)
-    return new_account
+    return account_to_response(db, new_account)
 
 
 @router.post("/transfer", response_model=TransactionResponse, summary="Realizar transferencia entre cuentas")
