@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy import String, Integer, Enum, DateTime, ForeignKey, func
+from sqlalchemy import String, Integer, Enum, DateTime, ForeignKey, Index, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -23,6 +23,10 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
+    nombre_usuario: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    __table_args__ = (
+        Index("ix_usuarios_nombre_usuario_unique", func.lower(nombre_usuario), unique=True),
+    )
     apellidos: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
     pin_hash: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -356,13 +356,15 @@ El login devuelve `access_token`, `token_type` y un resumen de `user`. Enviar:
 Authorization: Bearer <access_token>
 ```
 
-El adulto entra con email y contrasena. El acceso por PIN utiliza `user_id` o
-`qr_uuid` y un PIN de exactamente cuatro digitos. Si se proporciona QR, se utiliza
-esa via. Un QR identifica al usuario: **no sustituye al PIN**.
+El adulto entra con email y contrasena. El acceso por PIN utiliza `nombre_usuario`,
+`user_id` o `qr_uuid` y un PIN de exactamente cuatro digitos. El apodo esta
+disponible para NINO/FAMILIAR y se envia sin los otros identificadores (mezclarlos
+devuelve 400). Se conserva la prioridad del QR en clientes antiguos que envian
+ID y QR juntos. Un QR o apodo identifica al usuario: **no sustituye al PIN**.
 
 ### Limite de PIN y desbloqueo
 
-- Login por ID, login por QR y comprobacion del PIN actual comparten contador.
+- Login por apodo, ID, QR y comprobacion del PIN actual comparten contador.
 - Tras **3 fallos**, NINO/FAMILIAR queda bloqueado sin caducidad.
 - Durante el bloqueo se rechaza el acceso, incluido el uso de un token existente.
 - Cualquier PADRE/MADRE de su familia puede ejecutar `POST /users/{user_id}/unlock`.
@@ -393,7 +395,7 @@ Permisos utilizados en las tablas:
 |---|---|---|---|
 | GET | `/health` | Publico | Estado y nombre de la API |
 | POST | `/auth/login/parent` | Publico | `email`, `password`; devuelve token y usuario |
-| POST | `/auth/login/pin` | Publico | `pin` y `user_id` o `qr_uuid`; devuelve token y usuario |
+| POST | `/auth/login/pin` | Publico | `pin` y `nombre_usuario`, `user_id` o `qr_uuid`; devuelve token y usuario |
 | POST | `/auth/password/forgot` | Publico | `email`; respuesta generica 202, envio por SMTP |
 | POST | `/auth/password/reset` | Publico | `token`, `new_password`; 204 al restablecer |
 
@@ -410,7 +412,7 @@ responde 503. Los tokens de recuperacion duran una hora y son de un solo uso.
 | GET | `/users/children` | Padre | Solo NINO de la familia; para FAMILIAR usar `/users/?rol=FAMILIAR` |
 | POST | `/users/children` | Padre | Crear hijo NINO con PIN |
 | GET | `/users/{user_id}` | Propio/familia | Perfil |
-| PATCH | `/users/{user_id}` | Propio/familia | `nombre`, `apellidos`, `email`, `avatar_url` |
+| PATCH | `/users/{user_id}` | Propio/familia | `nombre`, `apellidos`, `email`, `avatar_url`; `nombre_usuario` solo por PADRE/MADRE |
 | DELETE | `/users/{user_id}` | Padre del hijo | Eliminar hijo; rechaza si tiene saldo positivo en cuentas |
 | POST | `/users/{user_id}/avatar` | Propio/familia | Multipart, campo `file`; devuelve perfil |
 | GET | `/users/{user_id}/avatar` | Propio/familia | Bytes JPEG de la foto almacenada |
@@ -421,9 +423,19 @@ responde 503. Los tokens de recuperacion duran una hora y son de un solo uso.
 | PATCH | `/users/{user_id}/cards/{card_id}` | Padre del hijo | `activa`: activar o revocar |
 
 Alta de usuario: `nombre`, `email`, `rol`, y `password` para PADRE/MADRE o `codigo_pin`
-para NINO/FAMILIAR. Opcionales: `apellidos`, `avatar_url`, `tarjeta_qr`.
+para NINO/FAMILIAR. Opcionales: `apellidos`, `avatar_url`, `tarjeta_qr`, `nombre_usuario`.
 `/users/children` mantiene el alta exclusiva de NINO; FAMILIAR se crea en `/users/`.
 Cada alta crea una cuenta corriente con saldo cero.
+
+`nombre_usuario` es opcional y exclusivo de NINO/FAMILIAR: 3-30 letras ASCII
+sin acentos, numeros o guion bajo, sin espacios interiores. Se recortan espacios
+exteriores y se guarda en minusculas. Es unico en toda la aplicacion, tambien
+entre familias y sin distinguir mayusculas; un duplicado devuelve 409.
+El indice unico en la base de datos protege tambien frente a altas simultaneas.
+Solo PADRE/MADRE de la familia pueden asignarlo, cambiarlo o borrarlo con `null`
+en PATCH. Omitirlo conserva su valor. Aparece en perfiles y en la respuesta de
+login; no sustituye al nombre real ni al PIN. Los usuarios existentes conservan
+`null` hasta que su administrador les asigne un apodo.
 
 `apellidos` admite hasta 150 caracteres y `avatar_url` hasta 255. En PATCH,
 omitirlos conserva su valor; enviar `null` los borra. Borrar o sustituir
@@ -652,6 +664,27 @@ miembros, incluyendo el bloqueo permanente en ambos roles de PIN.
 
 No intentar desbloquear por tiempo ni mediante PATCH de perfil.
 
+#### Alternativa al QR: apodo y PIN
+
+Al crear un NINO/FAMILIAR, el administrador puede incluir
+`"nombre_usuario": "leo_7"` en el alta. Para asignarlo a un usuario existente,
+enviar `PATCH /users/{user_id}` con su token PADRE/MADRE:
+
+```json
+{"nombre_usuario": "leo_7"}
+```
+
+El miembro puede entrar con `POST /auth/login/pin` sin recordar el codigo QR:
+
+```json
+{"nombre_usuario": "leo_7", "pin": "2468"}
+```
+
+El frontend debe ofrecer esta alternativa junto al escaneo QR. Si el apodo no
+existe, se devuelve 404; formato invalido, 422; PIN incorrecto, 401, hasta el
+bloqueo 403. Cambiar el apodo no reinicia los intentos ni desbloquea la cuenta.
+QR e ID siguen disponibles aunque se borre el apodo.
+
 ### 3. Foto desde movil o webcam
 
 1. Crear el usuario para obtener su ID.
@@ -803,7 +836,7 @@ Los modelos se registran en [app/db/base.py](app/db/base.py).
 
 | Entidad | Responsabilidad / estados |
 |---|---|
-| User | Perfil, rol, familia compartida, administrador creador, hash, intentos y bloqueo |
+| User | Perfil, apodo unico opcional, rol, familia compartida, administrador creador, hash, intentos y bloqueo |
 | UserAvatar | JPEG privado en base de datos, uno por usuario |
 | QrCard | Identificador QR y estado activo/inactivo |
 | Account | CORRIENTE, AHORRO o INVERSION |
@@ -854,7 +887,7 @@ Codigos frecuentes:
 | 401 | Autenticacion ausente/invalida o PIN incorrecto antes del bloqueo |
 | 403 | Permisos insuficientes o usuario bloqueado |
 | 404 | Recurso inexistente o no visible |
-| 409 | Conflicto: nombre repetido, politica existente, eliminacion con saldo |
+| 409 | Conflicto: nombre o apodo repetido, politica existente, eliminacion con saldo |
 | 413 | Foto demasiado grande en bytes o pixeles |
 | 422 | Campos o contenido de imagen invalidos |
 | 500 | Error interno |
@@ -929,6 +962,8 @@ validacion de concurrencia real requiere PostgreSQL y sesiones independientes.
   ```
 
   Los nuevos valores del enum se confirman antes del backfill de `familia_id`.
+  Tambien se agrega `nombre_usuario` nullable y su indice unico sin distinguir
+  mayusculas; no se generan apodos automaticamente ni se modifican los PIN.
   Los adultos existentes mantienen familias independientes; sus miembros
   heredan la familia segun `padre_id`. Los miembros sin vinculo permanecen
   aislados. Las familias ya asignadas no se sobrescriben al reiniciar.

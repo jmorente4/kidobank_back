@@ -1,6 +1,7 @@
 from typing import Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from app.models.user import UserRole
+from app.schemas.username import Username
 
 
 class LoginRequest(BaseModel):
@@ -17,6 +18,9 @@ class PinLoginRequest(BaseModel):
     pin: str = Field(..., pattern=r"^\d{4}$", description="PIN numérico de cuatro dígitos")
     user_id: Optional[int] = Field(None, description="ID del usuario (para selección por avatar)")
     qr_uuid: Optional[str] = Field(None, description="UUID de la tarjeta QR escaneada")
+    nombre_usuario: Optional[Username] = Field(
+        None, description="Apodo de NINO/FAMILIAR; usar sin user_id ni qr_uuid"
+    )
 
 
 class PasswordResetRequest(BaseModel):
@@ -32,6 +36,7 @@ class UserAuthSummary(BaseModel):
     id: int
     familia_id: Optional[int] = None
     nombre: str
+    nombre_usuario: Optional[str] = None
     apellidos: Optional[str] = None
     email: Optional[str] = None
     rol: UserRole

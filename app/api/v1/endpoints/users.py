@@ -31,6 +31,21 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _ensure_username_available(
+    nombre_usuario: Optional[str], db: Session, exclude_user_id: Optional[int] = None
+) -> None:
+    if nombre_usuario is None:
+        return
+    stmt = select(User.id).where(func.lower(User.nombre_usuario) == nombre_usuario)
+    if exclude_user_id is not None:
+        stmt = stmt.where(User.id != exclude_user_id)
+    if db.scalar(stmt) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ese nombre de usuario ya está registrado.",
+        )
+
+
 def _create_user(
     payload: UserCreate, db: Session, parent: Optional[User] = None
 ) -> User:
@@ -47,9 +62,17 @@ def _create_user(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="NINO/FAMILIAR requieren PIN; PADRE/MADRE requieren contraseña.",
         )
+    if payload.nombre_usuario is not None:
+        if payload.rol not in MEMBER_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="El nombre de usuario por PIN solo está disponible para NINO/FAMILIAR.",
+            )
+        _ensure_username_available(payload.nombre_usuario, db)
 
     new_user = User(
         nombre=payload.nombre,
+        nombre_usuario=payload.nombre_usuario,
         apellidos=payload.apellidos,
         avatar_url=payload.avatar_url,
         email=payload.email,
@@ -81,6 +104,7 @@ def _create_user(
     except IntegrityError as exc:
         db.rollback()
         logger.info("Conflicto de unicidad al registrar un usuario: %s", exc.orig)
+        _ensure_username_available(payload.nombre_usuario, db)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El correo o la tarjeta QR ya están registrados.",
@@ -230,8 +254,20 @@ def update_user(
     db: Session = Depends(get_db),
 ):
     user = _get_accessible_user(user_id, current_user, db)
+    if "nombre_usuario" in payload.model_fields_set:
+        if current_user.rol not in ADMIN_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo PADRE/MADRE de la familia pueden cambiar el nombre de usuario.",
+            )
+        if user.rol not in MEMBER_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="El nombre de usuario por PIN solo está disponible para NINO/FAMILIAR.",
+            )
+        _ensure_username_available(payload.nombre_usuario, db, exclude_user_id=user.id)
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
-    for field in ("apellidos", "avatar_url"):
+    for field in ("apellidos", "avatar_url", "nombre_usuario"):
         if field in payload.model_fields_set:
             data[field] = getattr(payload, field)
 
@@ -249,6 +285,7 @@ def update_user(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        _ensure_username_available(payload.nombre_usuario, db, exclude_user_id=user.id)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ya existe un usuario registrado con este correo electrónico",

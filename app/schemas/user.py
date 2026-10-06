@@ -3,10 +3,14 @@ from typing import Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.user import UserRole
+from app.schemas.username import Username
 
 
 class UserBase(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=100, description="Nombre completo del usuario")
+    nombre_usuario: Optional[Username] = Field(
+        None, description="Apodo único para NINO/FAMILIAR: 3-30 letras sin acentos, números o guion bajo"
+    )
     apellidos: Optional[str] = Field(None, max_length=150, description="Apellidos opcionales del usuario")
     avatar_url: Optional[str] = Field(None, max_length=255, description="URL opcional de la imagen de perfil")
     email: EmailStr = Field(..., description="Correo electrónico único de acceso")
@@ -35,6 +39,9 @@ class UserUpdate(BaseModel):
 
 
 class UserProfileUpdate(BaseModel):
+    nombre_usuario: Optional[Username] = Field(
+        None, description="Solo PADRE/MADRE de la familia; null elimina el apodo"
+    )
     nombre: Optional[str] = Field(None, min_length=2, max_length=100)
     apellidos: Optional[str] = Field(None, max_length=150, description="Enviar null para borrar los apellidos")
     avatar_url: Optional[str] = Field(None, max_length=255, description="Enviar null para borrar la imagen de perfil")

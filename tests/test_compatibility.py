@@ -36,7 +36,8 @@ def test_new_user_roles_commit_before_family_backfill():
     inspector.get_table_names.return_value = ["usuarios"]
     inspector.get_columns.return_value = [
         {"name": name} for name in (
-            "id", "rol", "padre_id", "familia_id", "apellidos", "avatar_url", "bloqueado_por_pin",
+            "id", "rol", "padre_id", "familia_id", "nombre_usuario",
+            "apellidos", "avatar_url", "bloqueado_por_pin",
         )
     ]
     connection = engine.begin.return_value.__enter__.return_value

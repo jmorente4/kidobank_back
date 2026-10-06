@@ -187,12 +187,17 @@ def ensure_family_columns(engine: Engine) -> None:
         {
             "padre_id": "INTEGER",
             "familia_id": "INTEGER",
+            "nombre_usuario": "VARCHAR(30)",
             "apellidos": "VARCHAR(150)",
             "avatar_url": "VARCHAR(255)",
             "bloqueado_por_pin": "BOOLEAN NOT NULL DEFAULT FALSE",
         },
     )
     with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_usuarios_nombre_usuario_unique "
+            "ON usuarios (lower(nombre_usuario))"
+        ))
         connection.execute(
             text("CREATE INDEX IF NOT EXISTS ix_usuarios_padre_id ON usuarios (padre_id)")
         )

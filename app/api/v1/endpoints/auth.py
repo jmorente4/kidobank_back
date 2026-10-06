@@ -5,14 +5,14 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.api.deps import get_db
 from app.core.security import create_access_token, get_password_hash, verify_password, verify_pin
 from app.models.password_reset import PasswordResetToken
-from app.models.user import ADMIN_ROLES, User
+from app.models.user import ADMIN_ROLES, MEMBER_ROLES, User
 from app.models.qr_card import QrCard
 from app.schemas.auth import (
     ParentLoginRequest,
@@ -169,7 +169,7 @@ def reset_password(
 @router.post(
     "/login/pin",
     response_model=TokenResponse,
-    summary="Inicio de sesión infantil o rápido mediante PIN numérico o QR",
+    summary="Inicio de sesión por PIN con apodo, ID o QR",
 )
 def login_pin(
     payload: PinLoginRequest,
@@ -179,15 +179,27 @@ def login_pin(
     Permite el acceso a niños o padres seleccionando su avatar (`user_id`) o escaneando su tarjeta QR (`qr_uuid`).
     Comparte el límite con el cambio de PIN: NINO/FAMILIAR se bloquean hasta que PADRE/MADRE los desbloqueen.
     """
-    if not payload.user_id and not payload.qr_uuid:
+    if payload.nombre_usuario is not None and (
+        payload.user_id is not None or payload.qr_uuid is not None
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Debes proporcionar user_id o qr_uuid para iniciar sesión.",
+            detail="Usa nombre_usuario sin user_id ni qr_uuid.",
+        )
+    if not payload.user_id and not payload.qr_uuid and payload.nombre_usuario is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Debes proporcionar nombre_usuario, user_id o qr_uuid para iniciar sesión.",
         )
 
     user: Optional[User] = None
 
-    if payload.qr_uuid:
+    if payload.nombre_usuario is not None:
+        user = db.scalar(select(User).where(
+            func.lower(User.nombre_usuario) == payload.nombre_usuario,
+            User.rol.in_(MEMBER_ROLES),
+        ))
+    elif payload.qr_uuid:
         stmt = select(User).where(User.qr_uuid == payload.qr_uuid)
         user = db.scalars(stmt).first()
         if not user:
