@@ -15,6 +15,31 @@ from app.schemas.task import TaskApprove, TaskCreate, TaskResponse
 router = APIRouter()
 
 
+@router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Eliminar una tarea en estado asignada",
+)
+def delete_task(
+    task_id: int,
+    current_parent: User = Depends(get_current_parent),
+    db: Session = Depends(get_db),
+):
+    task = db.scalar(select(Task).where(Task.id == task_id).with_for_update())
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada")
+    child = db.get(User, task.usuario_id)
+    if child is None or child.padre_id != current_parent.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada")
+    if task.estado != TaskStatus.ASIGNADA:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se pueden eliminar tareas asignadas, no pendientes de aprobación ni aprobadas",
+        )
+    db.delete(task)
+    db.commit()
+
+
 @router.get("", response_model=List[TaskResponse], summary="Listar las tareas visibles para el usuario")
 def list_tasks(
     current_user: User = Depends(get_current_user),

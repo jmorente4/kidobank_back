@@ -113,7 +113,7 @@ def buy_product(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    product = db.get(InvestmentProduct, product_id)
+    product = db.scalar(select(InvestmentProduct).where(InvestmentProduct.id == product_id).with_for_update())
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Activo no encontrado")
     if not product.activo:
@@ -159,6 +159,24 @@ def buy_product(
     db.commit()
     db.refresh(investment)
     return investment
+
+
+@router.delete(
+    "/products/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Desactivar un activo conservando posiciones e histórico",
+)
+def delete_product(
+    product_id: int,
+    current_parent: User = Depends(get_current_parent),
+    db: Session = Depends(get_db),
+):
+    product = db.scalar(select(InvestmentProduct).where(InvestmentProduct.id == product_id).with_for_update())
+    if product is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Activo no encontrado")
+    product.activo = False
+    product.updated_at = datetime.now(timezone.utc)
+    db.commit()
 
 
 @router.get("/news", response_model=List[MarketNewsResponse], summary="Listar noticias del mercado")

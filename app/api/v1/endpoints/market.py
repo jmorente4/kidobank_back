@@ -34,6 +34,8 @@ def list_market_items(
     stmt = select(MarketItem)
     if estado:
         stmt = stmt.where(MarketItem.estado == estado)
+    else:
+        stmt = stmt.where(MarketItem.estado != MarketStatus.CANCELADO)
     stmt = stmt.order_by(MarketItem.created_at.desc())
     return db.scalars(stmt).all()
 
@@ -76,7 +78,7 @@ def update_market_item(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = db.get(MarketItem, item_id)
+    item = db.scalar(select(MarketItem).where(MarketItem.id == item_id).with_for_update())
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artículo no encontrado")
     if not _can_access_market_party(current_user, item.vendedor_id, db):
@@ -96,6 +98,29 @@ def update_market_item(
     return item
 
 
+@router.delete(
+    "/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Retirar un artículo disponible conservando su historial",
+)
+def delete_market_item(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = db.scalar(select(MarketItem).where(MarketItem.id == item_id).with_for_update())
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artículo no encontrado")
+    if not _can_access_market_party(current_user, item.vendedor_id, db):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No puedes retirar este artículo")
+    if item.estado == MarketStatus.CANCELADO:
+        return
+    if item.estado != MarketStatus.DISPONIBLE:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo se pueden retirar artículos disponibles")
+    item.estado = MarketStatus.CANCELADO
+    db.commit()
+
+
 @router.post("/items/{item_id}/buy", response_model=EscrowResponse, summary="Comprar un artículo y bloquear dinero en escrow")
 def buy_market_item(
     item_id: int,
@@ -103,7 +128,7 @@ def buy_market_item(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = db.get(MarketItem, item_id)
+    item = db.scalar(select(MarketItem).where(MarketItem.id == item_id).with_for_update())
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artículo no encontrado")
     if item.vendedor_id == current_user.id:

@@ -7,10 +7,47 @@ from sqlalchemy.orm import Session
 from app.api.deps import can_access_user, get_current_user, get_db, get_family_user_ids
 from app.models.account import Account
 from app.models.goal import Goal
+from app.models.transaction import Transaction, TransactionStatus, TransactionType
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalDeposit, GoalResponse
 
 router = APIRouter()
+
+
+@router.delete(
+    "/{goal_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Eliminar una meta y devolver su ahorro a la cuenta vinculada",
+)
+def delete_goal(
+    goal_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    goal = db.scalar(select(Goal).where(Goal.id == goal_id).with_for_update())
+    if goal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meta no encontrada")
+    owner = db.get(User, goal.usuario_id)
+    if owner is None or not can_access_user(current_user, owner):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No puedes eliminar esta meta")
+    account = db.scalar(select(Account).where(Account.id == goal.cuenta_id).with_for_update())
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="La cuenta vinculada a la meta ya no existe")
+    if account.usuario_id != goal.usuario_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="La cuenta no pertenece al titular de la meta")
+    if goal.monto_actual > 0:
+        account.saldo += goal.monto_actual
+        db.add(
+            Transaction(
+                cuenta_destino_id=account.id,
+                monto=goal.monto_actual,
+                concepto=f"Devolución de meta: {goal.titulo}",
+                tipo=TransactionType.TRANSFERENCIA,
+                estado=TransactionStatus.COMPLETADA,
+            )
+        )
+    db.delete(goal)
+    db.commit()
 
 
 @router.get("/", response_model=List[GoalResponse], summary="Listar metas de ahorro")
@@ -61,7 +98,7 @@ def deposit_goal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    goal = db.get(Goal, goal_id)
+    goal = db.scalar(select(Goal).where(Goal.id == goal_id).with_for_update())
     if not goal:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La meta especificada no existe")
 
@@ -69,7 +106,7 @@ def deposit_goal(
     if owner is None or not can_access_user(current_user, owner):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permisos para aportar a esta meta")
 
-    cuenta = db.get(Account, goal.cuenta_id)
+    cuenta = db.scalar(select(Account).where(Account.id == goal.cuenta_id).with_for_update())
     if not cuenta:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La cuenta vinculada a la meta ya no existe")
 

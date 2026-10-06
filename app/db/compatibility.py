@@ -89,6 +89,7 @@ def ensure_economy_columns(engine: Engine) -> None:
         with engine.begin() as connection:
             for value in ("INVERSION", "DEPOSITO", "RETIRO", "INTERES", "RECOMPENSA"):
                 connection.execute(text(f"ALTER TYPE transactiontype ADD VALUE IF NOT EXISTS '{value}'"))
+            connection.execute(text("ALTER TYPE marketstatus ADD VALUE IF NOT EXISTS 'CANCELADO'"))
 
     tables = set(inspect(engine).get_table_names())
     now = datetime.now(timezone.utc).replace(tzinfo=None)
