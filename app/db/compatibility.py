@@ -179,12 +179,26 @@ def ensure_family_columns(engine: Engine) -> None:
     _add_missing_columns(
         engine,
         "usuarios",
-        {"padre_id": "INTEGER", "apellidos": "VARCHAR(150)", "avatar_url": "VARCHAR(255)"},
+        {
+            "padre_id": "INTEGER",
+            "apellidos": "VARCHAR(150)",
+            "avatar_url": "VARCHAR(255)",
+            "bloqueado_por_pin": "BOOLEAN NOT NULL DEFAULT FALSE",
+        },
     )
     with engine.begin() as connection:
         connection.execute(
             text("CREATE INDEX IF NOT EXISTS ix_usuarios_padre_id ON usuarios (padre_id)")
         )
+        columns = {column["name"] for column in inspect(connection).get_columns("usuarios")}
+        if "bloqueado_hasta" in columns:
+            connection.execute(
+                text(
+                    "UPDATE usuarios SET bloqueado_por_pin = TRUE, bloqueado_hasta = NULL "
+                    "WHERE rol = 'NINO' AND bloqueado_hasta > :now"
+                ),
+                {"now": datetime.now(timezone.utc).replace(tzinfo=None)},
+            )
         if is_new_column:
             parent_ids = connection.execute(
                 text("SELECT id FROM usuarios WHERE rol = 'PADRE'")

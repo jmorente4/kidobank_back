@@ -23,19 +23,13 @@ from app.schemas.auth import (
     UserAuthSummary,
 )
 from app.services.password_reset import send_password_reset_email
+from app.services.login_attempts import (
+    check_lockout,
+    lock_auth_user,
+    record_failed_attempt,
+)
 
 router = APIRouter()
-
-MAX_FAILED_ATTEMPTS = 3
-LOCKOUT_MINUTES = 15
-
-
-def _locked_until(user: User) -> Optional[datetime]:
-    value = user.bloqueado_hasta
-    if value is not None and value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
-
 
 @router.post(
     "/login/parent",
@@ -59,22 +53,13 @@ def login_parent(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Comprobar si la cuenta está bloqueada por reintento de PIN
+    user = lock_auth_user(db, user.id)
     now_utc = datetime.now(timezone.utc)
-    blocked_until = _locked_until(user)
-    if blocked_until and blocked_until > now_utc:
-        minutos_restantes = int((blocked_until - now_utc).total_seconds() / 60) + 1
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Cuenta bloqueada temporalmente. Inténtalo de nuevo en {minutos_restantes} minuto(s).",
-        )
+    check_lockout(user, now_utc)
 
     # Validar contraseña/PIN
     if not verify_password(payload.password, user.pin_hash) and not verify_pin(payload.password, user.pin_hash):
-        user.intentos_fallidos += 1
-        if user.intentos_fallidos >= MAX_FAILED_ATTEMPTS:
-            user.bloqueado_hasta = now_utc + timedelta(minutes=LOCKOUT_MINUTES)
-        db.commit()
+        record_failed_attempt(db, user, now_utc)
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -192,7 +177,7 @@ def login_pin(
 ):
     """
     Permite el acceso a niños o padres seleccionando su avatar (`user_id`) o escaneando su tarjeta QR (`qr_uuid`).
-    Aplica bloqueo automático tras 3 intentos fallidos consecutivos.
+    Comparte el límite con el cambio de PIN: 3 fallos bloquean al niño hasta que su padre lo desbloquee.
     """
     if not payload.user_id and not payload.qr_uuid:
         raise HTTPException(
@@ -221,30 +206,16 @@ def login_pin(
             detail="Usuario no encontrado",
         )
 
+    user = lock_auth_user(db, user.id)
     now_utc = datetime.now(timezone.utc)
-
-    # Comprobar si la cuenta está bloqueada
-    blocked_until = _locked_until(user)
-    if blocked_until and blocked_until > now_utc:
-        minutos_restantes = int((blocked_until - now_utc).total_seconds() / 60) + 1
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Cuenta bloqueada por seguridad tras fallar {MAX_FAILED_ATTEMPTS} veces el PIN. Inténtalo de nuevo en {minutos_restantes} minuto(s).",
-        )
+    check_lockout(user, now_utc)
 
     # Verificar el PIN numérico
     if not verify_pin(payload.pin, user.pin_hash):
-        user.intentos_fallidos += 1
-        if user.intentos_fallidos >= MAX_FAILED_ATTEMPTS:
-            user.bloqueado_hasta = now_utc + timedelta(minutes=LOCKOUT_MINUTES)
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"PIN incorrecto. Has superado los {MAX_FAILED_ATTEMPTS} intentos. Cuenta bloqueada durante {LOCKOUT_MINUTES} minutos.",
-            )
+        intentos_restantes = record_failed_attempt(db, user, now_utc)
+        if intentos_restantes == 0:
+            check_lockout(user, now_utc)
 
-        db.commit()
-        intentos_restantes = MAX_FAILED_ATTEMPTS - user.intentos_fallidos
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"PIN incorrecto. Te quedan {intentos_restantes} intento(s).",

@@ -34,6 +34,7 @@ class User(Base):
     )
     
     intentos_fallidos: Mapped[int] = mapped_column(Integer, default=0)
+    bloqueado_por_pin: Mapped[bool] = mapped_column(default=False, nullable=False)
     bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     tarjetas_qr = relationship("QrCard", back_populates="usuario", cascade="all, delete-orphan")
     avatar: Mapped[Optional["UserAvatar"]] = relationship(

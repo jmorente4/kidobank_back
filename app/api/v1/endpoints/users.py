@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
@@ -23,6 +24,7 @@ from app.schemas.qr_card import QrCardCreate, QrCardResponse, QrCardUpdate
 from app.schemas.user import PinChange, UserCreate, UserProfileUpdate, UserResponse
 from app.models.user_avatar import UserAvatar
 from app.services.avatar import MAX_UPLOAD_BYTES, optimize_avatar
+from app.services.login_attempts import MAX_FAILED_ATTEMPTS, check_lockout, lock_auth_user, record_failed_attempt
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -249,7 +251,12 @@ def update_user(
     return user
 
 
-@router.patch("/{user_id}/pin", status_code=status.HTTP_204_NO_CONTENT, summary="Cambiar el PIN de un niño")
+@router.patch(
+    "/{user_id}/pin",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Cambiar el PIN de un niño",
+    description="3 fallos bloquean al niño hasta el desbloqueo del padre. Cambiar el PIN no desbloquea la cuenta.",
+)
 def change_pin(
     user_id: int,
     payload: PinChange,
@@ -263,13 +270,43 @@ def change_pin(
             detail="Solo los usuarios NINO tienen PIN.",
         )
     if current_user.id == child.id:
-        if not payload.pin_actual or not verify_pin(payload.pin_actual, child.pin_hash):
+        if not payload.pin_actual:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="El PIN actual no es correcto")
+        child = lock_auth_user(db, child.id)
+        now = datetime.now(timezone.utc)
+        check_lockout(child, now)
+        if not verify_pin(payload.pin_actual, child.pin_hash):
+            record_failed_attempt(db, child, now)
+            check_lockout(child, now)
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="El PIN actual no es correcto")
+    else:
+        child = lock_auth_user(db, child.id)
 
     child.pin_hash = get_password_hash(payload.pin_nuevo)
+    if not child.bloqueado_por_pin and child.intentos_fallidos < MAX_FAILED_ATTEMPTS:
+        child.intentos_fallidos = 0
+        child.bloqueado_hasta = None
+    db.commit()
+
+
+@router.post(
+    "/{user_id}/unlock",
+    response_model=UserResponse,
+    summary="Desbloquear el acceso por PIN de un hijo",
+    description="Solo su padre puede desbloquearlo. Reinicia los intentos sin cambiar el PIN.",
+)
+def unlock_child(
+    user_id: int,
+    current_parent: User = Depends(get_current_parent),
+    db: Session = Depends(get_db),
+):
+    child = lock_auth_user(db, _get_managed_child(user_id, current_parent, db).id)
+    child.bloqueado_por_pin = False
     child.intentos_fallidos = 0
     child.bloqueado_hasta = None
     db.commit()
+    db.refresh(child)
+    return child
 
 
 def _get_managed_child(user_id: int, current_parent: User, db: Session) -> User:

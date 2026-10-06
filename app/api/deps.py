@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models.user import User, UserRole
+from app.services.login_attempts import check_lockout
 
 security = HTTPBearer(auto_error=False)
 
@@ -59,15 +60,7 @@ def get_optional_current_user(
     if user is None:
         raise credentials_exception
 
-    # Control de bloqueo temporal por seguridad
-    blocked_until = user.bloqueado_hasta
-    if blocked_until is not None and blocked_until.tzinfo is None:
-        blocked_until = blocked_until.replace(tzinfo=timezone.utc)
-    if blocked_until and blocked_until > datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="La cuenta se encuentra bloqueada temporalmente por seguridad."
-        )
+    check_lockout(user, datetime.now(timezone.utc))
 
     return user
 

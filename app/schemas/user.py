@@ -50,6 +50,7 @@ class PinChange(BaseModel):
 
 class UserResponse(UserBase):
     id: int
+    bloqueado_por_pin: bool = False
     padre_id: Optional[int] = None
     fecha_creacion: datetime
 
