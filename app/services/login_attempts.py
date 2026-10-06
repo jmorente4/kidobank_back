@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.user import User, UserRole
+from app.models.user import MEMBER_ROLES, User
 
 MAX_FAILED_ATTEMPTS = 3
 LOCKOUT_MINUTES = 15
@@ -22,11 +22,11 @@ def lock_auth_user(db: Session, user_id: int) -> User:
 
 def check_lockout(user: User, now: datetime) -> None:
     if user.bloqueado_por_pin or (
-        user.rol == UserRole.NINO and user.intentos_fallidos >= MAX_FAILED_ATTEMPTS
+        user.rol in MEMBER_ROLES and user.intentos_fallidos >= MAX_FAILED_ATTEMPTS
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cuenta bloqueada por intentos de PIN. Tu padre debe desbloquearla.",
+            detail="Cuenta bloqueada por intentos de PIN. Un PADRE o MADRE de tu familia debe desbloquearla.",
         )
     blocked_until = user.bloqueado_hasta
     if blocked_until is not None:
@@ -47,7 +47,7 @@ def record_failed_attempt(db: Session, user: User, now: datetime) -> int:
     user.intentos_fallidos += 1
     remaining = max(0, MAX_FAILED_ATTEMPTS - user.intentos_fallidos)
     if remaining == 0:
-        if user.rol == UserRole.NINO:
+        if user.rol in MEMBER_ROLES:
             user.bloqueado_por_pin = True
             user.bloqueado_hasta = None
         else:

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     can_access_user,
+    family_key,
     get_current_parent,
     get_current_user,
     get_db,
@@ -19,7 +20,7 @@ from app.core.security import get_password_hash, verify_pin
 from app.models.account import Account, AccountType
 from app.models.bond import Bond
 from app.models.qr_card import QrCard
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, MEMBER_ROLES, User, UserRole
 from app.schemas.qr_card import QrCardCreate, QrCardResponse, QrCardUpdate
 from app.schemas.user import PinChange, UserCreate, UserProfileUpdate, UserResponse
 from app.models.user_avatar import UserAvatar
@@ -30,7 +31,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _create_user(payload: UserCreate, db: Session, parent_id: Optional[int] = None) -> User:
+def _create_user(
+    payload: UserCreate, db: Session, parent: Optional[User] = None
+) -> User:
     existing_user = db.scalars(select(User).where(User.email == payload.email)).first()
     if existing_user:
         raise HTTPException(
@@ -38,11 +41,11 @@ def _create_user(payload: UserCreate, db: Session, parent_id: Optional[int] = No
             detail="Ya existe un usuario registrado con este correo electrónico",
         )
 
-    password_or_pin = payload.codigo_pin if payload.rol == UserRole.NINO else payload.password
+    password_or_pin = payload.codigo_pin if payload.rol in MEMBER_ROLES else payload.password
     if not password_or_pin:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Debes establecer un PIN para el niño o una contraseña para el adulto.",
+            detail="NINO/FAMILIAR requieren PIN; PADRE/MADRE requieren contraseña.",
         )
 
     new_user = User(
@@ -52,13 +55,16 @@ def _create_user(payload: UserCreate, db: Session, parent_id: Optional[int] = No
         email=payload.email,
         pin_hash=get_password_hash(password_or_pin),
         rol=payload.rol,
-        padre_id=parent_id,
-        qr_uuid=payload.tarjeta_qr if payload.rol == UserRole.NINO else None,
+        padre_id=parent.id if parent and payload.rol in MEMBER_ROLES else None,
+        familia_id=family_key(parent) if parent else None,
+        qr_uuid=payload.tarjeta_qr if payload.rol in MEMBER_ROLES else None,
     )
     try:
         db.add(new_user)
         db.flush()
-        if payload.tarjeta_qr:
+        if parent is None:
+            new_user.familia_id = new_user.id
+        if payload.tarjeta_qr and payload.rol in MEMBER_ROLES:
             db.add(QrCard(qr_uuid=payload.tarjeta_qr, usuario_id=new_user.id))
         db.add(
             Account(
@@ -119,7 +125,7 @@ def list_children(
 ):
     return db.scalars(
         select(User)
-        .where(User.padre_id == current_parent.id, User.rol == UserRole.NINO)
+        .where(User.id.in_(get_family_user_ids(current_parent, db)), User.rol == UserRole.NINO)
         .order_by(User.id.asc())
     ).all()
 
@@ -140,7 +146,7 @@ def create_child(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="El alta de un hijo requiere rol NINO y un PIN de cuatro dígitos.",
         )
-    return _create_user(payload, db, parent_id=current_parent.id)
+    return _create_user(payload, db, parent=current_parent)
 
 
 @router.get("/{user_id}", response_model=UserResponse, summary="Obtener usuario de la familia por ID")
@@ -254,8 +260,8 @@ def update_user(
 @router.patch(
     "/{user_id}/pin",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Cambiar el PIN de un niño",
-    description="3 fallos bloquean al niño hasta el desbloqueo del padre. Cambiar el PIN no desbloquea la cuenta.",
+    summary="Cambiar el PIN de NINO/FAMILIAR",
+    description="3 fallos bloquean hasta el desbloqueo por PADRE/MADRE de la familia. Cambiar el PIN no desbloquea.",
 )
 def change_pin(
     user_id: int,
@@ -264,10 +270,10 @@ def change_pin(
     db: Session = Depends(get_db),
 ):
     child = _get_accessible_user(user_id, current_user, db)
-    if child.rol != UserRole.NINO:
+    if child.rol not in MEMBER_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Solo los usuarios NINO tienen PIN.",
+            detail="Solo los usuarios NINO o FAMILIAR tienen PIN.",
         )
     if current_user.id == child.id:
         if not payload.pin_actual:
@@ -292,8 +298,8 @@ def change_pin(
 @router.post(
     "/{user_id}/unlock",
     response_model=UserResponse,
-    summary="Desbloquear el acceso por PIN de un hijo",
-    description="Solo su padre puede desbloquearlo. Reinicia los intentos sin cambiar el PIN.",
+    summary="Desbloquear el acceso por PIN de NINO/FAMILIAR",
+    description="Solo PADRE/MADRE de su familia. Reinicia los intentos sin cambiar el PIN.",
 )
 def unlock_child(
     user_id: int,
@@ -311,10 +317,10 @@ def unlock_child(
 
 def _get_managed_child(user_id: int, current_parent: User, db: Session) -> User:
     child = _get_accessible_user(user_id, current_parent, db)
-    if child.rol != UserRole.NINO:
+    if child.rol not in MEMBER_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Solo se pueden gestionar tarjetas de usuarios NINO.",
+            detail="Solo se pueden gestionar miembros NINO o FAMILIAR.",
         )
     return child
 
@@ -345,7 +351,7 @@ def list_user_cards(
     "/{user_id}/cards",
     response_model=QrCardResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Emitir una tarjeta QR nueva para un hijo (revoca las anteriores)",
+    summary="Emitir una tarjeta QR para NINO/FAMILIAR (revoca las anteriores)",
 )
 def issue_user_card(
     user_id: int,
@@ -390,7 +396,7 @@ def issue_user_card(
 @router.patch(
     "/{user_id}/cards/{card_id}",
     response_model=QrCardResponse,
-    summary="Activar o revocar una tarjeta QR de un hijo",
+    summary="Activar o revocar una tarjeta QR de NINO/FAMILIAR",
 )
 def update_user_card(
     user_id: int,
@@ -415,7 +421,7 @@ def update_user_card(
 @router.delete(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Eliminar un hijo y todos sus datos",
+    summary="Eliminar un miembro NINO/FAMILIAR y todos sus datos",
 )
 def delete_child(
     user_id: int,
@@ -446,7 +452,7 @@ def delete_child(
     "/",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Registrar el primer adulto o crear un hijo",
+    summary="Registrar un adulto o crear un usuario de la familia",
 )
 def create_user(
     payload: UserCreate,
@@ -454,21 +460,21 @@ def create_user(
     db: Session = Depends(get_db),
 ):
     if current_user is None:
-        if payload.rol != UserRole.PADRE:
+        if payload.rol not in ADMIN_ROLES:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="El registro público solo permite crear usuarios PADRE. Un padre crea las cuentas NINO.",
+                detail="El registro público solo permite PADRE/MADRE; los miembros requieren un administrador.",
             )
         return _create_user(payload, db)
 
-    if current_user.rol != UserRole.PADRE or payload.rol != UserRole.NINO:
+    if current_user.rol not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Un usuario autenticado PADRE solo puede crear usuarios NINO vinculados a su familia.",
+            detail="Solo PADRE/MADRE pueden crear usuarios vinculados a su familia.",
         )
-    if not payload.codigo_pin:
+    if payload.rol in MEMBER_ROLES and not payload.codigo_pin:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Al crear un usuario NINO es obligatorio establecer un PIN de cuatro dígitos.",
+            detail="NINO/FAMILIAR requieren un PIN de cuatro dígitos.",
         )
-    return _create_user(payload, db, parent_id=current_user.id)
+    return _create_user(payload, db, parent=current_user)

@@ -13,7 +13,7 @@ from app.api.deps import (
 )
 from app.models.account import Account
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
-from app.models.user import User, UserRole
+from app.models.user import MEMBER_ROLES, User
 from app.schemas.transaction import TransactionResponse, TransactionCreate
 
 
@@ -315,7 +315,7 @@ def abonar_paga(
     db: Session = Depends(get_db),
 ):
     """
-    Permite exclusivamente a un usuario con rol PADRE abonar la paga a un niño.
+    Permite a PADRE/MADRE abonar la paga a NINO/FAMILIAR de su familia.
     """
     stmt_destino = select(Account).where(Account.id == payload.cuenta_destino_id).with_for_update()
     cuenta_destino = db.scalars(stmt_destino).first()
@@ -329,12 +329,12 @@ def abonar_paga(
     dueno_destino = db.get(User, cuenta_destino.usuario_id)
     if (
         not dueno_destino
-        or dueno_destino.rol != UserRole.NINO
+        or dueno_destino.rol not in MEMBER_ROLES
         or not can_access_user(current_parent, dueno_destino)
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La paga solo puede ser abonada a una cuenta perteneciente a un usuario de rol NIÑO",
+            detail="La paga solo puede abonarse a NINO/FAMILIAR de tu familia",
         )
 
     cuenta_origen = None

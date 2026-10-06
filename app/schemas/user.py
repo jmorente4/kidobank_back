@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.user import UserRole
 
@@ -10,7 +10,7 @@ class UserBase(BaseModel):
     apellidos: Optional[str] = Field(None, max_length=150, description="Apellidos opcionales del usuario")
     avatar_url: Optional[str] = Field(None, max_length=255, description="URL opcional de la imagen de perfil")
     email: EmailStr = Field(..., description="Correo electrónico único de acceso")
-    rol: UserRole = Field(default=UserRole.NINO, description="Rol del usuario en la plataforma (PADRE o NINO)")
+    rol: UserRole = Field(default=UserRole.NINO, description="PADRE/MADRE administran; NINO/FAMILIAR usan PIN")
     tarjeta_qr: Optional[str] = Field(
         None, max_length=255, description="Identificador único del token o tarjeta QR para el niño"
     )
@@ -49,9 +49,13 @@ class PinChange(BaseModel):
 
 
 class UserResponse(UserBase):
+    tarjeta_qr: Optional[str] = Field(
+        None, validation_alias=AliasChoices("tarjeta_qr", "qr_uuid")
+    )
     id: int
     bloqueado_por_pin: bool = False
     padre_id: Optional[int] = None
+    familia_id: Optional[int] = None
     fecha_creacion: datetime
 
     model_config = ConfigDict(from_attributes=True)

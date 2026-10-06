@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import can_access_user, get_current_parent, get_db, get_current_user
+from app.api.deps import can_access_user, get_family_admin_ids, get_current_parent, get_db, get_current_user
 from app.models.account import Account
 from app.models.bond import Bond, BondOffer, BondStatus
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, MEMBER_ROLES, User
 from app.schemas.bond import BondCreate, BondOfferCreate, BondOfferResponse, BondResponse
 
 router = APIRouter()
@@ -18,7 +18,7 @@ router = APIRouter()
     "/offers",
     response_model=BondOfferResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Publicar una oferta de bono para los hijos (solo padres)",
+    summary="Publicar una oferta de bono familiar (PADRE/MADRE)",
 )
 def create_offer(
     offer_in: BondOfferCreate,
@@ -41,53 +41,50 @@ def create_offer(
 @router.get(
     "/offers",
     response_model=List[BondOfferResponse],
-    summary="Listar ofertas: las propias (padre) o las activas del padre (hijo)",
+    summary="Listar ofertas de la familia; NINO/FAMILIAR solo ven las activas",
 )
 def list_offers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     stmt = select(BondOffer).order_by(BondOffer.id.desc())
-    if current_user.rol == UserRole.PADRE:
-        stmt = stmt.where(BondOffer.padre_id == current_user.id)
-    else:
-        if current_user.padre_id is None:
-            return []
-        stmt = stmt.where(BondOffer.padre_id == current_user.padre_id, BondOffer.activa.is_(True))
+    stmt = stmt.where(BondOffer.padre_id.in_(get_family_admin_ids(current_user, db)))
+    if current_user.rol not in ADMIN_ROLES:
+        stmt = stmt.where(BondOffer.activa.is_(True))
     return db.scalars(stmt).all()
 
 
-@router.delete("/offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Retirar una oferta propia")
+@router.delete("/offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Retirar una oferta de la familia")
 def delete_offer(
     offer_id: int,
     current_parent: User = Depends(get_current_parent),
     db: Session = Depends(get_db),
 ):
     offer = db.get(BondOffer, offer_id)
-    if offer is None or offer.padre_id != current_parent.id:
+    if offer is None or offer.padre_id not in get_family_admin_ids(current_parent, db):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La oferta no existe")
     db.delete(offer)
     db.commit()
 
 
-@router.post("/", response_model=BondResponse, status_code=status.HTTP_201_CREATED, summary="Comprar una oferta de bono (solo hijos)")
+@router.post("/", response_model=BondResponse, status_code=status.HTTP_201_CREATED, summary="Comprar una oferta de bono (NINO/FAMILIAR)")
 def create_bond(
     bond_in: BondCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    El hijo compra una oferta de renta fija publicada por su padre, pagando con una cuenta propia.
+    El miembro compra una oferta familiar de renta fija, pagando con una cuenta propia.
     Las condiciones (título, tasa y plazo) las fija la oferta.
     """
-    if current_user.rol != UserRole.NINO:
+    if current_user.rol not in MEMBER_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo los hijos pueden comprar bonos; el padre únicamente los publica",
+            detail="Solo NINO/FAMILIAR pueden comprar bonos; PADRE/MADRE los publican",
         )
 
     offer = db.get(BondOffer, bond_in.oferta_id)
-    if offer is None or not offer.activa or offer.padre_id != current_user.padre_id:
+    if offer is None or not offer.activa or offer.padre_id not in get_family_admin_ids(current_user, db):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La oferta de bono no existe")
     if bond_in.monto_invertido < offer.monto_minimo:
         raise HTTPException(

@@ -9,7 +9,13 @@ from app.db.base_class import Base
 
 class UserRole(str, enum.Enum):
     PADRE = "PADRE"
+    MADRE = "MADRE"
     NINO = "NINO"
+    FAMILIAR = "FAMILIAR"
+
+
+ADMIN_ROLES = (UserRole.PADRE, UserRole.MADRE)
+MEMBER_ROLES = (UserRole.NINO, UserRole.FAMILIAR)
 
 
 class User(Base):
@@ -23,6 +29,9 @@ class User(Base):
     rol: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False, default=UserRole.NINO)
     padre_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    familia_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("usuarios.id"), nullable=True, index=True
     )
     avatar_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     qr_uuid: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True)
@@ -64,6 +73,6 @@ class User(Base):
         cascade="all, delete-orphan"
     )
     padre: Mapped[Optional["User"]] = relationship(
-        "User", remote_side="User.id", back_populates="hijos"
+        "User", remote_side="User.id", foreign_keys=[padre_id], back_populates="hijos"
     )
-    hijos: Mapped[List["User"]] = relationship("User", back_populates="padre")
+    hijos: Mapped[List["User"]] = relationship("User", foreign_keys=[padre_id], back_populates="padre")

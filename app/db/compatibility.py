@@ -174,6 +174,10 @@ def ensure_family_columns(engine: Engine) -> None:
     """Add optional profile fields and populate legacy parent-child links when unambiguous."""
     if "usuarios" not in inspect(engine).get_table_names():
         return
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as connection:
+            for role in ("MADRE", "FAMILIAR"):
+                connection.execute(text(f"ALTER TYPE userrole ADD VALUE IF NOT EXISTS '{role}'"))
     is_new_column = "padre_id" not in {
         column["name"] for column in inspect(engine).get_columns("usuarios")
     }
@@ -182,6 +186,7 @@ def ensure_family_columns(engine: Engine) -> None:
         "usuarios",
         {
             "padre_id": "INTEGER",
+            "familia_id": "INTEGER",
             "apellidos": "VARCHAR(150)",
             "avatar_url": "VARCHAR(255)",
             "bloqueado_por_pin": "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -191,12 +196,15 @@ def ensure_family_columns(engine: Engine) -> None:
         connection.execute(
             text("CREATE INDEX IF NOT EXISTS ix_usuarios_padre_id ON usuarios (padre_id)")
         )
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_usuarios_familia_id ON usuarios (familia_id)")
+        )
         columns = {column["name"] for column in inspect(connection).get_columns("usuarios")}
         if "bloqueado_hasta" in columns:
             connection.execute(
                 text(
                     "UPDATE usuarios SET bloqueado_por_pin = TRUE, bloqueado_hasta = NULL "
-                    "WHERE rol = 'NINO' AND bloqueado_hasta > :now"
+                    "WHERE rol IN ('NINO', 'FAMILIAR') AND bloqueado_hasta > :now"
                 ),
                 {"now": datetime.now(timezone.utc).replace(tzinfo=None)},
             )
@@ -212,3 +220,15 @@ def ensure_family_columns(engine: Engine) -> None:
                     ),
                     {"parent_id": parent_ids[0]},
                 )
+        connection.execute(text(
+            "UPDATE usuarios SET familia_id = id "
+            "WHERE rol IN ('PADRE', 'MADRE') AND familia_id IS NULL"
+        ))
+        connection.execute(text(
+            "UPDATE usuarios SET familia_id = ("
+            "SELECT COALESCE(p.familia_id, p.id) FROM usuarios p WHERE p.id = usuarios.padre_id"
+            ") WHERE familia_id IS NULL AND padre_id IS NOT NULL"
+        ))
+        connection.execute(text(
+            "UPDATE usuarios SET familia_id = id WHERE familia_id IS NULL"
+        ))

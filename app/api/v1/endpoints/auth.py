@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import get_db
 from app.core.security import create_access_token, get_password_hash, verify_password, verify_pin
 from app.models.password_reset import PasswordResetToken
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, User
 from app.models.qr_card import QrCard
 from app.schemas.auth import (
     ParentLoginRequest,
@@ -46,10 +46,10 @@ def login_parent(
     stmt = select(User).where(User.email == payload.email)
     user = db.scalars(stmt).first()
 
-    if not user or user.rol != UserRole.PADRE:
+    if not user or user.rol not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales incorrectas o el usuario no es un Padre",
+            detail="Credenciales incorrectas o el usuario no es PADRE/MADRE",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -97,7 +97,7 @@ def request_password_reset(
         )
 
     user = db.scalars(
-        select(User).where(User.email == payload.email, User.rol == UserRole.PADRE)
+        select(User).where(User.email == payload.email, User.rol.in_(ADMIN_ROLES))
     ).first()
     if user:
         now = datetime.now(timezone.utc)
@@ -150,7 +150,7 @@ def reset_password(
         )
 
     user = db.get(User, reset_token.usuario_id)
-    if user is None or user.rol != UserRole.PADRE:
+    if user is None or user.rol not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El enlace de restablecimiento no es válido o ha caducado.",
@@ -177,7 +177,7 @@ def login_pin(
 ):
     """
     Permite el acceso a niños o padres seleccionando su avatar (`user_id`) o escaneando su tarjeta QR (`qr_uuid`).
-    Comparte el límite con el cambio de PIN: 3 fallos bloquean al niño hasta que su padre lo desbloquee.
+    Comparte el límite con el cambio de PIN: NINO/FAMILIAR se bloquean hasta que PADRE/MADRE los desbloqueen.
     """
     if not payload.user_id and not payload.qr_uuid:
         raise HTTPException(

@@ -3,12 +3,12 @@ from typing import Callable, Generator, List, Optional, Union
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, MEMBER_ROLES, User, UserRole
 from app.services.login_attempts import check_lockout
 
 security = HTTPBearer(auto_error=False)
@@ -79,17 +79,34 @@ def get_current_user(
 
 def get_family_user_ids(current_user: User, db: Session) -> List[int]:
     """IDs visible to a user: their own account and linked family members."""
-    if current_user.rol == UserRole.PADRE:
-        children = db.scalars(select(User.id).where(User.padre_id == current_user.id)).all()
-        return [current_user.id, *children]
+    if current_user.rol in ADMIN_ROLES:
+        return list(db.scalars(
+            select(User.id).where(
+                func.coalesce(User.familia_id, User.padre_id, User.id) == family_key(current_user)
+            )
+        ).all())
     return [current_user.id]
+
+
+def family_key(user: User) -> int:
+    """Keep legacy parent links compatible while familia_id is backfilled."""
+    return user.familia_id or user.padre_id or user.id
+
+
+def get_family_admin_ids(user: User, db: Session) -> List[int]:
+    return list(db.scalars(
+        select(User.id).where(
+            User.rol.in_(ADMIN_ROLES),
+            func.coalesce(User.familia_id, User.padre_id, User.id) == family_key(user),
+        )
+    ).all())
 
 
 def can_access_user(current_user: User, target_user: User) -> bool:
     if current_user.id == target_user.id:
         return True
-    if current_user.rol == UserRole.PADRE:
-        return target_user.padre_id == current_user.id
+    if current_user.rol in ADMIN_ROLES:
+        return family_key(current_user) == family_key(target_user)
     return False
 
 
@@ -115,23 +132,23 @@ def require_role(allowed_roles: Union[UserRole, List[UserRole]]) -> Callable:
 
 def get_current_parent(current_user: User = Depends(get_current_user)) -> User:
     """
-    Dependencia rápida para asegurar que el usuario es exclusivamente un PADRE.
+    Dependencia para administradores PADRE o MADRE.
     """
-    if current_user.rol != UserRole.PADRE:
+    if current_user.rol not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acceso denegado: Se requieren permisos de Padre."
+            detail="Acceso denegado: Se requieren permisos de PADRE o MADRE."
         )
     return current_user
 
 
 def get_current_child(current_user: User = Depends(get_current_user)) -> User:
     """
-    Dependencia rápida para asegurar que el usuario es un NIÑO.
+    Dependencia para miembros NINO o FAMILIAR.
     """
-    if current_user.rol != UserRole.NINO:
+    if current_user.rol not in MEMBER_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acceso denegado: Se requieren permisos de Niño."
+            detail="Acceso denegado: Se requieren permisos de NINO o FAMILIAR."
         )
     return current_user

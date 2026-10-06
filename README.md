@@ -330,8 +330,18 @@ CORS_ORIGINS=["http://localhost:5173","https://frontend.example.com"]
 
 ### Roles
 
-- **PADRE**: adulto que administra sus propios datos y los de sus hijos.
-- **NINO**: menor vinculado a un adulto mediante `padre_id`.
+- **PADRE / MADRE**: administradores con los mismos permisos sobre su familia.
+- **NINO / FAMILIAR**: miembros con los mismos permisos limitados sobre sus datos.
+  FAMILIAR permite incluir abuelos, tios o primos; acceden con PIN y QR, no con
+  contrasena de administrador.
+
+`familia_id` identifica la familia compartida usando el ID de su primer
+administrador. `padre_id` conserva el administrador que creo al miembro por
+compatibilidad; no limita el acceso del otro administrador.
+Un registro publico PADRE o MADRE crea una familia independiente. Para compartir
+familia, un administrador autenticado crea al otro mediante `POST /users/`,
+indicando su rol y contrasena. No se fusionan familias por nombre o email.
+El rol y la familia no se pueden cambiar mediante el PATCH de perfil.
 
 El adulto no tiene acceso general a los datos privados de otras familias.
 Un menor normalmente solo accede a sus propios datos. Excepciones de catalogo:
@@ -353,9 +363,9 @@ esa via. Un QR identifica al usuario: **no sustituye al PIN**.
 ### Limite de PIN y desbloqueo
 
 - Login por ID, login por QR y comprobacion del PIN actual comparten contador.
-- Tras **3 fallos**, el menor queda bloqueado sin caducidad.
+- Tras **3 fallos**, NINO/FAMILIAR queda bloqueado sin caducidad.
 - Durante el bloqueo se rechaza el acceso, incluido el uso de un token existente.
-- Solo el padre vinculado puede ejecutar `POST /users/{user_id}/unlock`.
+- Cualquier PADRE/MADRE de su familia puede ejecutar `POST /users/{user_id}/unlock`.
 - El desbloqueo reinicia los intentos y no cambia el PIN.
 - Cambiar el PIN de un menor bloqueado no lo desbloquea.
 - El estado `bloqueado_por_pin` aparece en las respuestas de usuario.
@@ -373,9 +383,9 @@ Permisos utilizados en las tablas:
 
 - **Publico**: no requiere token.
 - **Autenticado**: cualquier rol con token valido y no bloqueado.
-- **Propio/familia**: menor sobre si mismo; adulto sobre si mismo o sus hijos.
-- **Padre**: rol PADRE, con comprobaciones de propiedad donde corresponda.
-- **Hijo asignado**: exclusivamente el menor destinatario.
+- **Propio/familia**: NINO/FAMILIAR sobre si mismo; PADRE/MADRE sobre su familia.
+- **Padre** (incluido "Padre del hijo"): PADRE o MADRE de la familia del miembro.
+- **Hijo asignado**: exclusivamente el destinatario NINO o FAMILIAR.
 
 ### Salud y autenticacion
 
@@ -395,9 +405,9 @@ responde 503. Los tokens de recuperacion duran una hora y son de un solo uso.
 | Metodo | Ruta | Permiso | Entrada / resultado |
 |---|---|---|---|
 | GET | `/users/` | Autenticado | Familia visible; filtros `rol`, `limit=50`, `offset=0` |
-| POST | `/users/` | Publico / Padre | Registro publico de PADRE o creacion autenticada de hijo |
+| POST | `/users/` | Publico / Padre | Registro publico PADRE/MADRE; con token crea cualquier rol en la misma familia |
 | GET | `/users/me` | Autenticado | Perfil actual |
-| GET | `/users/children` | Padre | Hijos propios |
+| GET | `/users/children` | Padre | Solo NINO de la familia; para FAMILIAR usar `/users/?rol=FAMILIAR` |
 | POST | `/users/children` | Padre | Crear hijo NINO con PIN |
 | GET | `/users/{user_id}` | Propio/familia | Perfil |
 | PATCH | `/users/{user_id}` | Propio/familia | `nombre`, `apellidos`, `email`, `avatar_url` |
@@ -410,8 +420,9 @@ responde 503. Los tokens de recuperacion duran una hora y son de un solo uso.
 | POST | `/users/{user_id}/cards` | Padre del hijo | `{}` o `qr_uuid`; emite tarjeta y revoca anteriores activas |
 | PATCH | `/users/{user_id}/cards/{card_id}` | Padre del hijo | `activa`: activar o revocar |
 
-Alta de usuario: `nombre`, `email`, `rol`, y `password` para PADRE o `codigo_pin`
-para NINO. Opcionales: `apellidos`, `avatar_url`, `tarjeta_qr`.
+Alta de usuario: `nombre`, `email`, `rol`, y `password` para PADRE/MADRE o `codigo_pin`
+para NINO/FAMILIAR. Opcionales: `apellidos`, `avatar_url`, `tarjeta_qr`.
+`/users/children` mantiene el alta exclusiva de NINO; FAMILIAR se crea en `/users/`.
 Cada alta crea una cuenta corriente con saldo cero.
 
 `apellidos` admite hasta 150 caracteres y `avatar_url` hasta 255. En PATCH,
@@ -467,7 +478,7 @@ origen emite Kidos directamente. No hay programacion automatica de pagas.
 | GET | `/bonds/offers` | Autenticado | Padre: ofertas propias; hijo: activas de su padre |
 | POST | `/bonds/offers` | Padre | `titulo`, `tasa_interes`, `plazo_dias`, `monto_minimo` opcional |
 | DELETE | `/bonds/offers/{offer_id}` | Padre propietario | Retirar oferta; 204 |
-| POST | `/bonds/` | NINO | `oferta_id`, `cuenta_origen_id`, `monto_invertido` |
+| POST | `/bonds/` | NINO/FAMILIAR | `oferta_id`, `cuenta_origen_id`, `monto_invertido` |
 | GET | `/bonds/` | Propio/familia | Filtrar con `usuario_id`; sin filtro, usuario actual |
 | POST | `/bonds/{bond_id}/redeem` | Propio/familia | Sin cuerpo; rescate a la cuenta de origen |
 
@@ -526,7 +537,7 @@ funcionalidades diferentes: el flujo de renta fija familiar usa `/bonds/`.
 Desactivar impide nuevas compras y simulaciones del activo y lo oculta del listado
 de activos. El detalle e historico siguen accesibles y las posiciones existentes
 pueden venderse al ultimo precio. Como el catalogo es global y no hay creador
-asociado, cualquier PADRE puede desactivar un producto.
+asociado, cualquier PADRE/MADRE puede desactivar un producto.
 
 ### Economia y patrimonio
 
@@ -611,6 +622,24 @@ Retirar un articulo en ESCROW o VENDIDO devuelve 409, sin mover fondos.
 
 Los emails de los ejemplos son ilustrativos. El esquema de alta actual exige
 email tambien para los menores, aunque el modelo de base de datos admite null.
+
+Para incorporar al segundo administrador, enviar a `POST /users/` con el token
+del primero:
+
+```json
+{
+  "nombre": "Maria",
+  "email": "maria@example.com",
+  "rol": "MADRE",
+  "password": "una-contrasena-propia"
+}
+```
+
+Tambien puede ser PADRE creado por MADRE. Los dos administran los miembros
+existentes y futuros, tareas y ofertas de bonos de la misma familia.
+Para un FAMILIAR, usar ese endpoint con `rol: "FAMILIAR"` y `codigo_pin`.
+El frontend debe agrupar PADRE/MADRE como administradores y NINO/FAMILIAR como
+miembros, incluyendo el bloqueo permanente en ambos roles de PIN.
 
 ### 2. QR y desbloqueo de PIN
 
@@ -774,7 +803,7 @@ Los modelos se registran en [app/db/base.py](app/db/base.py).
 
 | Entidad | Responsabilidad / estados |
 |---|---|
-| User | Perfil, rol, padre, hash, intentos y bloqueo |
+| User | Perfil, rol, familia compartida, administrador creador, hash, intentos y bloqueo |
 | UserAvatar | JPEG privado en base de datos, uno por usuario |
 | QrCard | Identificador QR y estado activo/inactivo |
 | Account | CORRIENTE, AHORRO o INVERSION |
@@ -877,8 +906,8 @@ validacion de concurrencia real requiere PostgreSQL y sesiones independientes.
   no hay API TPV publicada actualmente.
 - No hay `/investments/simulate` publico, refresh de JWT, cierre de sesion con
   revocacion de token ni retirada bancaria generica publicada.
-- El registro publico permite crear adultos; no esta restringido automaticamente
-  al primer adulto pese al resumen de la ruta.
+- El registro publico permite crear adultos en familias independientes; no esta
+  restringido automaticamente al primer adulto.
 - Los catalogos de mercado, inversiones y noticias, y la politica de inflacion,
   son globales. No asumir aislamiento familiar de esos recursos.
 - Los hashes no se incluyen en las respuestas. Las fotos privadas requieren
@@ -895,10 +924,16 @@ validacion de concurrencia real requiere PostgreSQL y sesiones independientes.
 
   ```sql
   ALTER TYPE marketstatus ADD VALUE IF NOT EXISTS 'CANCELADO';
+  ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'MADRE';
+  ALTER TYPE userrole ADD VALUE IF NOT EXISTS 'FAMILIAR';
   ```
 
+  Los nuevos valores del enum se confirman antes del backfill de `familia_id`.
+  Los adultos existentes mantienen familias independientes; sus miembros
+  heredan la familia segun `padre_id`. Los miembros sin vinculo permanecen
+  aislados. Las familias ya asignadas no se sobrescriben al reiniciar.
   La cuenta PostgreSQL utilizada para las actualizaciones debe tener permisos
-  para alterar ese tipo. Una actualizacion fallida impide el arranque.
+  para alterar esos tipos y la tabla usuarios. Una actualizacion fallida impide el arranque.
 - Cada proceso de aplicacion inicia un scheduler. Para despliegues con multiples
   workers/replicas, planificar y validar la coordinacion de tareas periodicas.
 - Los importes actuales utilizan Float: es una simulacion educativa, no un

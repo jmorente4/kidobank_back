@@ -8,7 +8,7 @@ from app.api.deps import can_access_user, get_db, get_current_user
 from app.models.account import Account, AccountType
 from app.models.bond import Bond
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
-from app.models.user import User, UserRole
+from app.models.user import ADMIN_ROLES, User
 from app.schemas.account import AccountCreate, AccountResponse, AccountUpdate, TransferRequest
 from app.schemas.transaction import TransactionResponse
 from app.services.patrimonio import account_to_response
@@ -129,7 +129,7 @@ def delete_account(
     db: Session = Depends(get_db),
 ):
     """Solo los padres pueden eliminar cuentas (propias o de sus hijos) y únicamente si el saldo es 0."""
-    if current_user.rol != UserRole.PADRE:
+    if current_user.rol not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los padres pueden eliminar cuentas bancarias",
@@ -173,7 +173,7 @@ def create_account(
     """
     Crea una nueva cuenta bancaria para un usuario. Solo los usuarios con rol PADRE pueden crear cuentas.
     """
-    if current_user.rol != UserRole.PADRE:
+    if current_user.rol not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo los padres pueden crear cuentas bancarias",
