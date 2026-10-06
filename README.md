@@ -12,6 +12,7 @@ escaneo de QR corresponden al frontend.
 
 - [Tecnologias y arquitectura](#tecnologias-y-arquitectura)
 - [Instalacion y ejecucion](#instalacion-y-ejecucion)
+- [Despliegue en Raspberry Pi con Docker](#despliegue-en-raspberry-pi-con-docker)
 - [Configuracion](#configuracion)
 - [Autenticacion y permisos](#autenticacion-y-permisos)
 - [Catalogo de endpoints](#catalogo-de-endpoints)
@@ -98,6 +99,192 @@ adulto. Contiene credenciales conocidas de demostracion: no utilizarlo en
 produccion. Para una instalacion normal, registrar al adulto mediante la API.
 El script crea tablas, pero no ejecuta todas las actualizaciones de compatibilidad;
 en una base de datos antigua, iniciar primero la aplicacion.
+
+## Despliegue en Raspberry Pi con Docker
+
+Preparado para Raspberry Pi OS/Linux **64 bits (`aarch64`)**, con Docker Engine
+y Docker Compose v2. El frontend existente puede continuar en el puerto `8081`.
+La API se publica en `8000`; PostgreSQL solo es accesible en la red de Compose,
+sin publicar `5432` en la Raspberry Pi.
+
+Archivos:
+
+- [Dockerfile](Dockerfile): Python 3.11, usuario sin privilegios y un worker.
+- [compose.yaml](compose.yaml): API, PostgreSQL 16, salud y volumen persistente.
+- [.dockerignore](.dockerignore): solo envia codigo de aplicacion y dependencias
+  al build; excluye secretos, entornos locales, fotos de prueba y archivos Git.
+- [.env.raspberry.example](.env.raspberry.example): plantilla de despliegue.
+
+Los comandos de esta seccion se ejecutan en la **terminal Linux de la Raspberry
+Pi**, no en PowerShell.
+
+### 1. Preparar el servidor
+
+```sh
+uname -m
+docker version
+docker compose version
+git clone https://github.com/jmorente4/kidobank_back.git
+cd kidobank_back
+cp .env.raspberry.example .env.raspberry
+chmod 600 .env.raspberry
+```
+
+Si el repositorio es privado, utilizar el metodo de autenticacion Git habitual.
+Si ya esta clonado, actualizar esa copia en lugar de crear otra. No copiar el
+`venv` de Windows al servidor.
+
+Crear dos secretos diferentes:
+
+```sh
+openssl rand -hex 32
+openssl rand -hex 32
+nano .env.raspberry
+```
+
+Asignar uno a `POSTGRES_PASSWORD` y otro a `SECRET_KEY`. No publicar esos valores.
+La plantilla deja ambos vacios a proposito: Compose rechazara el arranque hasta
+que se rellenen. Utilizar hex evita problemas de codificacion de la contrasena
+en la URL PostgreSQL construida por la configuracion actual.
+
+Cambiar las IP de ejemplo por la IP real de la Raspberry Pi, por ejemplo:
+
+```dotenv
+CORS_ORIGINS=["http://192.168.1.50:8081"]
+PASSWORD_RESET_URL=http://192.168.1.50:8081/reset-password
+```
+
+El origen CORS debe coincidir exactamente con lo que abre el navegador. Si se
+utiliza tambien un nombre local, incluir ambos origenes en la lista JSON.
+Puede configurarse `API_BIND_IP` con la IP LAN para limitar donde escucha;
+el valor por defecto `0.0.0.0` escucha en todas las interfaces del servidor.
+No reenviar el puerto de la API desde el router a Internet.
+
+### 2. Construir y arrancar
+
+```sh
+docker compose --env-file .env.raspberry config --quiet
+docker compose --env-file .env.raspberry up -d --build
+docker compose --env-file .env.raspberry ps
+docker compose --env-file .env.raspberry logs --tail=100 api
+curl --fail http://127.0.0.1:8000/health
+```
+
+Usar `--env-file .env.raspberry` en **todos** los comandos: configura tanto la
+interpolacion de Compose como el entorno de la API. Si `API_BIND_IP` se ha fijado
+a la IP LAN, utilizar esa IP en el comando curl en lugar de `127.0.0.1`.
+La primera construccion puede tardar, especialmente en una Raspberry Pi.
+
+La API espera a que PostgreSQL este preparado; crea tablas y aplica compatibilidad
+antes de aceptar peticiones. El healthcheck de la API verifica HTTP y una consulta
+a PostgreSQL. Un contenedor unhealthy requiere investigar los logs: la politica
+de reinicio reinicia procesos que terminan, no contenedores solo unhealthy.
+
+Desde otro equipo de la red:
+
+- API: `http://IP_DE_LA_RASPBERRY:8000/api/v1`
+- Swagger: `http://IP_DE_LA_RASPBERRY:8000/docs`
+- Frontend existente: `http://IP_DE_LA_RASPBERRY:8081`
+
+Comprobar que el cortafuegos permite los puertos necesarios **solo desde la LAN**.
+
+### 3. Conectar el frontend existente
+
+Configurar su URL base de API con la IP accesible desde el navegador:
+`http://IP_DE_LA_RASPBERRY:8000/api/v1` si el cliente agrega rutas como `/users/`,
+o `http://IP_DE_LA_RASPBERRY:8000` si ya agrega `/api/v1`.
+No duplicar ese prefijo.
+
+**No utilizar `http://api:8000` ni `http://localhost:8000` en el navegador**:
+`api` es un nombre de la red Docker y localhost es el equipo/telefono que abre la
+web, no la Raspberry Pi. No es necesario compartir la red Docker del frontend
+para esta conexion directa desde el navegador.
+
+El nombre de la variable depende del repositorio frontend. Si es una variable
+Vite integrada en el bundle, cambiar el entorno del build y **reconstruir el
+contenedor frontend**; cambiar solo su entorno de ejecucion no modifica el
+JavaScript ya generado. Verificar en la pestaña Network que las peticiones
+apuntan a la IP y puerto correctos.
+
+Registrar el adulto desde el frontend o Swagger y crear sus hijos. El contenedor
+no ejecuta el seed ni incorpora cuentas con contrasenas de demostracion.
+
+Este despliegue crea una base de datos nueva. Para conservar usuarios y datos
+del entorno de desarrollo, realizar una exportacion/restauracion planificada;
+no copiar archivos de PostgreSQL en funcionamiento al volumen.
+
+### 4. HTTP local, camara y fotos
+
+HTTP por IP es util para pruebas en una LAN de confianza, pero no cifra PIN,
+contrasena, tokens ni fotos. No es un despliegue con HTTPS.
+La captura de webcam mediante `getUserMedia` normalmente necesita HTTPS; localhost
+es una excepcion, pero una IP LAN no. El selector de archivos/foto del movil puede
+funcionar segun navegador, pero no sustituye ese requisito para webcam.
+
+Para usar camara web de forma fiable y proteger credenciales, el siguiente paso
+es un proxy HTTPS y un certificado confiable en los dispositivos. No se incluye
+un certificado autofirmado ni se desactiva la seguridad del navegador.
+
+### 5. Datos, copias de seguridad y actualizaciones
+
+Los datos, fotos, historicos y cursores estan en el volumen `postgres_data` de
+Compose. Sobreviven a reconstrucciones y a `docker compose down`.
+**No ejecutar `down -v`** salvo que se quiera borrar expresamente toda la base.
+Si cambia el nombre del proyecto Compose, se seleccionara otro volumen.
+
+Copia logica, sin exponer PostgreSQL al host:
+
+```sh
+umask 077
+docker compose --env-file .env.raspberry exec -T db \
+  sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > kidobank.dump
+test -s kidobank.dump
+docker compose --env-file .env.raspberry exec -T db \
+  pg_restore --list < kidobank.dump
+```
+
+Comprobar el codigo de salida de los comandos, guardar la copia fuera de la
+Raspberry Pi y probar periodicamente la restauracion en una base separada.
+La copia contiene datos personales y fotos; protegerla igual que la base.
+Respaldar tambien `.env.raspberry` de forma privada para conservar los secretos,
+sin guardarlo en Git ni en el build de Docker.
+
+Para restaurar en una **base de destino vacia**, con la API detenida y despues
+de verificar el destino:
+
+```sh
+docker compose --env-file .env.raspberry stop api
+docker compose --env-file .env.raspberry exec -T db \
+  sh -c 'pg_restore --exit-on-error --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < kidobank.dump
+docker compose --env-file .env.raspberry start api
+```
+
+No restaurar sobre tablas existentes sin un procedimiento explicito. Si falla,
+investigar antes de volver a iniciar la API.
+
+Actualizar codigo tras hacer copia de seguridad:
+
+```sh
+git pull --ff-only
+docker compose --env-file .env.raspberry up -d --build
+docker compose --env-file .env.raspberry ps
+docker compose --env-file .env.raspberry logs --tail=100 api
+curl --fail http://127.0.0.1:8000/health
+```
+
+Mantener un solo worker de API: el scheduler se inicia por proceso. PostgreSQL
+esta fijado a la version mayor 16; no cambiar de version mayor usando directamente
+el mismo volumen. Cambiar `POSTGRES_PASSWORD` en el archivo no cambia la
+contrasena de un usuario ya creado: requiere una rotacion coordinada en la base.
+Cambiar `SECRET_KEY` invalida los JWT existentes.
+
+La API corre sin privilegios, con filesystem de solo lectura y un `/tmp` temporal
+para multipart. Los logs se consultan con Docker; no se escriben fotos en el
+filesystem. `bcrypt==3.2.2` conserva la compatibilidad con el Passlib actual.
+Los requisitos restantes siguen el manifiesto existente; para despliegues
+totalmente reproducibles se necesita fijar tambien el resto de dependencias y
+los digests de imagen tras validar el build en ARM64.
 
 ## Configuracion
 

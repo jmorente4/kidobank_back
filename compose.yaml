@@ -1,0 +1,59 @@
+name: kidobank-back
+
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Define POSTGRES_DB in .env.raspberry}
+      POSTGRES_USER: ${POSTGRES_USER:?Define POSTGRES_USER in .env.raspberry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env.raspberry}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.raspberry
+    environment:
+      ENVIRONMENT: production
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: "5432"
+      DATABASE_URL: ""
+      SECRET_KEY: ${SECRET_KEY:?Define SECRET_KEY in .env.raspberry}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Define CORS_ORIGINS in .env.raspberry}
+    ports:
+      - "${API_BIND_IP:-0.0.0.0}:${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; from sqlalchemy import text; from app.db.session import engine; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close(); connection = engine.connect(); connection.execute(text('SELECT 1')); connection.close()"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres_data:
