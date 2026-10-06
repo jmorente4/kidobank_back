@@ -31,6 +31,7 @@ class PasswordResetConfirm(BaseModel):
 class UserAuthSummary(BaseModel):
     id: int
     nombre: str
+    apellidos: Optional[str] = None
     email: Optional[str] = None
     rol: UserRole
     avatar_url: Optional[str] = None

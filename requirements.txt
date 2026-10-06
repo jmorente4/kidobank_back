@@ -7,3 +7,5 @@ pydantic-settings
 email-validator
 pyjwt
 passlib[bcrypt]
+python-multipart
+Pillow

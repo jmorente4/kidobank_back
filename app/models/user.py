@@ -17,6 +17,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     nombre: Mapped[str] = mapped_column(String(100), nullable=False)
+    apellidos: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
     pin_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     rol: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False, default=UserRole.NINO)
@@ -35,6 +36,9 @@ class User(Base):
     intentos_fallidos: Mapped[int] = mapped_column(Integer, default=0)
     bloqueado_hasta: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     tarjetas_qr = relationship("QrCard", back_populates="usuario", cascade="all, delete-orphan")
+    avatar: Mapped[Optional["UserAvatar"]] = relationship(
+        "UserAvatar", back_populates="usuario", cascade="all, delete-orphan"
+    )
 
     items_vendidos: Mapped[List["MarketItem"]] = relationship(
         "MarketItem",

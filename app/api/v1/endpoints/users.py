@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +21,8 @@ from app.models.qr_card import QrCard
 from app.models.user import User, UserRole
 from app.schemas.qr_card import QrCardCreate, QrCardResponse, QrCardUpdate
 from app.schemas.user import PinChange, UserCreate, UserProfileUpdate, UserResponse
+from app.models.user_avatar import UserAvatar
+from app.services.avatar import MAX_UPLOAD_BYTES, optimize_avatar
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,6 +45,8 @@ def _create_user(payload: UserCreate, db: Session, parent_id: Optional[int] = No
 
     new_user = User(
         nombre=payload.nombre,
+        apellidos=payload.apellidos,
+        avatar_url=payload.avatar_url,
         email=payload.email,
         pin_hash=get_password_hash(password_or_pin),
         rol=payload.rol,
@@ -160,7 +164,57 @@ def _get_accessible_user(user_id: int, current_user: User, db: Session) -> User:
     return user
 
 
-@router.patch("/{user_id}", response_model=UserResponse, summary="Modificar nombre y email de un usuario de la familia")
+@router.post(
+    "/{user_id}/avatar",
+    response_model=UserResponse,
+    summary="Subir una foto de perfil desde la cámara o un archivo",
+    description=(
+        "Enviar multipart/form-data con el campo file. Acepta JPEG, PNG y WebP "
+        "hasta 5 MB y 20 megapíxeles. Guarda un JPEG de hasta 512 x 512 sin metadatos. "
+        "avatar_url es una ruta relativa al backend; para consultarla se requiere Bearer."
+    ),
+)
+def upload_avatar(
+    user_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = _get_accessible_user(user_id, current_user, db)
+    image = optimize_avatar(file.file.read(MAX_UPLOAD_BYTES + 1))
+    if user.avatar is None:
+        user.avatar = UserAvatar(imagen=image)
+    else:
+        user.avatar.imagen = image
+    user.avatar_url = f"/api/v1/users/{user.id}/avatar"
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.get(
+    "/{user_id}/avatar",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}}},
+    summary="Consultar la foto de perfil almacenada",
+    description="Requiere Bearer. Descargar como Blob para mostrarla en el frontend.",
+)
+def get_avatar(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = _get_accessible_user(user_id, current_user, db)
+    if user.avatar is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No hay foto de perfil almacenada")
+    return Response(
+        content=user.avatar.imagen,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.patch("/{user_id}", response_model=UserResponse, summary="Modificar el perfil de un usuario de la familia")
 def update_user(
     user_id: int,
     payload: UserProfileUpdate,
@@ -169,6 +223,9 @@ def update_user(
 ):
     user = _get_accessible_user(user_id, current_user, db)
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
+    for field in ("apellidos", "avatar_url"):
+        if field in payload.model_fields_set:
+            data[field] = getattr(payload, field)
 
     if "email" in data and data["email"] != user.email:
         if db.scalars(select(User.id).where(User.email == data["email"])).first():
@@ -176,6 +233,8 @@ def update_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Ya existe un usuario registrado con este correo electrónico",
             )
+    if "avatar_url" in data and data["avatar_url"] != user.avatar_url:
+        user.avatar = None
     for field, value in data.items():
         setattr(user, field, value)
     try:

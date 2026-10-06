@@ -1,6 +1,7 @@
 # Módulo de registro centralizado para SQLAlchemy y Alembic
 from app.db.base_class import Base  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.user_avatar import UserAvatar  # noqa: F401
 from app.models.qr_card import QrCard  # noqa: F401
 from app.models.account import Account  # noqa: F401
 from app.models.transaction import Transaction  # noqa: F401

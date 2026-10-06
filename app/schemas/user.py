@@ -7,6 +7,8 @@ from app.models.user import UserRole
 
 class UserBase(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=100, description="Nombre completo del usuario")
+    apellidos: Optional[str] = Field(None, max_length=150, description="Apellidos opcionales del usuario")
+    avatar_url: Optional[str] = Field(None, max_length=255, description="URL opcional de la imagen de perfil")
     email: EmailStr = Field(..., description="Correo electrónico único de acceso")
     rol: UserRole = Field(default=UserRole.NINO, description="Rol del usuario en la plataforma (PADRE o NINO)")
     tarjeta_qr: Optional[str] = Field(
@@ -23,6 +25,8 @@ class UserCreate(UserBase):
 
 class UserUpdate(BaseModel):
     nombre: Optional[str] = Field(None, min_length=2, max_length=100)
+    apellidos: Optional[str] = Field(None, max_length=150)
+    avatar_url: Optional[str] = Field(None, max_length=255)
     email: Optional[EmailStr] = None
     password: Optional[str] = Field(None, min_length=6, max_length=100)
     rol: Optional[UserRole] = None
@@ -32,6 +36,8 @@ class UserUpdate(BaseModel):
 
 class UserProfileUpdate(BaseModel):
     nombre: Optional[str] = Field(None, min_length=2, max_length=100)
+    apellidos: Optional[str] = Field(None, max_length=150, description="Enviar null para borrar los apellidos")
+    avatar_url: Optional[str] = Field(None, max_length=255, description="Enviar null para borrar la imagen de perfil")
     email: Optional[EmailStr] = None
 
 

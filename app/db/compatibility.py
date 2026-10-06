@@ -170,13 +170,17 @@ def ensure_economy_columns(engine: Engine) -> None:
 
 
 def ensure_family_columns(engine: Engine) -> None:
-    """Add and, when unambiguous, populate the parent-child link on older databases."""
+    """Add optional profile fields and populate legacy parent-child links when unambiguous."""
     if "usuarios" not in inspect(engine).get_table_names():
         return
     is_new_column = "padre_id" not in {
         column["name"] for column in inspect(engine).get_columns("usuarios")
     }
-    _add_missing_columns(engine, "usuarios", {"padre_id": "INTEGER"})
+    _add_missing_columns(
+        engine,
+        "usuarios",
+        {"padre_id": "INTEGER", "apellidos": "VARCHAR(150)", "avatar_url": "VARCHAR(255)"},
+    )
     with engine.begin() as connection:
         connection.execute(
             text("CREATE INDEX IF NOT EXISTS ix_usuarios_padre_id ON usuarios (padre_id)")
