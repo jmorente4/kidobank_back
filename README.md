@@ -315,6 +315,10 @@ credenciales reales ni el archivo `.env` al repositorio.
 Los campos `POSTGRES_*` obligatorios siguen siendo necesarios en Settings aunque
 se suministre `DATABASE_URL`. Si la contrasena contiene caracteres especiales,
 utilizar una URL de conexion correctamente codificada.
+La URL generada utiliza `postgresql+psycopg2://` para seleccionar explicitamente
+el driver instalado (`psycopg2-binary`). Si se define `DATABASE_URL` manualmente,
+utilizar tambien ese prefijo; `postgresql://` puede seleccionar otro driver
+segun la version de SQLAlchemy y provocar `No module named 'psycopg'`.
 
 Ejemplo de CORS:
 
