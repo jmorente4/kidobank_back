@@ -14,6 +14,7 @@ class TransactionType(str, enum.Enum):
     PAGA = "PAGA"                  # Paga periódica concedida por el padre
     INTERES = "INTERES"            # Rendimiento generado por la cuenta de Ahorro/Inversión
     INVERSION = "INVERSION"        # Compra o venta de un activo de inversión
+    RECOMPENSA = "RECOMPENSA"      # Recompensa de una tarea aprobada
 
 
 class TransactionStatus(str, enum.Enum):

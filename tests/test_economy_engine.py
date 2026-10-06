@@ -3,10 +3,10 @@ from datetime import datetime, timedelta, timezone
 from app.core.security import get_password_hash
 from app.models.account import Account, AccountType
 from app.models.economy import InflationPolicy, InflationPolicyStatus
-from app.models.investment import InvestmentProduct, InvestmentType
+from app.models.investment import InvestmentPriceHistory, InvestmentProduct, InvestmentType
 from app.models.market import MarketItem, MarketStatus
 from app.models.user import User, UserRole
-from app.services.market_engine import run_periodic_jobs, step_price
+from app.services.market_engine import run_market_updates, run_periodic_jobs, step_price
 import random
 
 
@@ -92,6 +92,42 @@ def test_mercado_tiene_semanas_bajistas_consecutivas():
     assert bear_left == 0
 
 
+def test_simulacion_guarda_un_punto_de_historial_por_cada_semana(client, padre_user, db):
+    headers = _parent_headers(client)
+    created = client.post(
+        "/api/v1/investments/products",
+        json={
+            "nombre": "Indice historico",
+            "codigo": "HISTORY-01",
+            "tipo": "INDICE",
+            "precio_actual_kidos": 100.0,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    product = db.get(InvestmentProduct, created.json()["id"])
+    initial = db.query(InvestmentPriceHistory).filter_by(producto_id=product.id).one()
+    cursor = datetime.now(timezone.utc) - timedelta(days=14)
+    product.ultima_simulacion = cursor
+    initial.fecha = cursor
+    db.commit()
+
+    now = cursor + timedelta(days=14)
+    assert run_market_updates(db, now=now, rng=random.Random(7)) == 1
+    db.flush()
+    points = (
+        db.query(InvestmentPriceHistory)
+        .filter_by(producto_id=product.id)
+        .order_by(InvestmentPriceHistory.fecha.asc())
+        .all()
+    )
+    assert len(points) == 3
+    expected_dates = [cursor, cursor + timedelta(days=7), now]
+    assert [point.fecha for point in points] == [
+        value.replace(tzinfo=None) for value in expected_dates
+    ]
+
+
 def test_noticia_aplica_puntos_porcentuales_y_registra_nuevo_precio(client, padre_user, db):
     headers = _parent_headers(client)
     created = client.post(
@@ -128,6 +164,56 @@ def test_noticia_aplica_puntos_porcentuales_y_registra_nuevo_precio(client, padr
     db.refresh(product)
     assert product.precio_actual_kidos == 105.0
     assert product.variacion_pct == 5.0
+
+    history = client.get(f"/api/v1/investments/products/{product_id}/history", headers=headers)
+    assert history.status_code == 200
+    assert [point["precio_kidos"] for point in history.json()] == [100.0, 105.0]
+
+
+def test_noticia_global_aplica_a_todos_los_indices_activos(client, padre_user, db):
+    headers = _parent_headers(client)
+    indices = []
+    for name, code, price in (
+        ("Índice A", "GLOBAL-A", 100.0),
+        ("Índice B", "GLOBAL-B", 200.0),
+    ):
+        response = client.post(
+            "/api/v1/investments/products",
+            json={"nombre": name, "codigo": code, "tipo": "INDICE", "precio_actual_kidos": price},
+            headers=headers,
+        )
+        assert response.status_code == 201
+        indices.append(response.json())
+    bond = client.post(
+        "/api/v1/investments/products",
+        json={"nombre": "Bono", "codigo": "GLOBAL-BOND", "tipo": "BONO", "precio_actual_kidos": 50.0},
+        headers=headers,
+    )
+    assert bond.status_code == 201
+
+    news = client.post(
+        "/api/v1/investments/news",
+        json={
+            "titulo": "Noticia global",
+            "descripcion": "Afecta al mercado de índices.",
+            "impacto_pct": 10.0,
+        },
+        headers=headers,
+    )
+    assert news.status_code == 201
+    assert news.json()["producto_id"] is None
+    assert news.json()["precio_anterior"] is None
+    assert news.json()["precio_resultante"] is None
+
+    for product, expected in zip(indices, (110.0, 220.0)):
+        db.refresh(db.get(InvestmentProduct, product["id"]))
+        assert db.get(InvestmentProduct, product["id"]).precio_actual_kidos == expected
+        history = client.get(
+            f"/api/v1/investments/products/{product['id']}/history",
+            headers=headers,
+        )
+        assert [point["precio_kidos"] for point in history.json()] == [product["precio_actual_kidos"], expected]
+    assert db.get(InvestmentProduct, bond.json()["id"]).precio_actual_kidos == 50.0
 
 
 def test_interes_de_ahorro_se_paga_semanalmente_y_es_idempotente(client, padre_user, db):

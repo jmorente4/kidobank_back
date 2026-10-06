@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.economy import InflationPolicy
-from app.models.investment import InvestmentProduct, InvestmentType
+from app.models.investment import InvestmentPriceHistory, InvestmentProduct, InvestmentType
 from app.models.market import MarketItem, MarketStatus
 from app.models.account import Account, AccountType
 from app.models.transaction import Transaction, TransactionStatus, TransactionType
@@ -87,8 +87,15 @@ def run_market_updates(db: Session, now: Optional[datetime] = None, rng: Optiona
 
         price = product.precio_actual_kidos
         bear_left = product.semanas_bajistas_restantes
-        for _ in range(weeks):
+        for week_number in range(1, weeks + 1):
             price, bear_left, _ = step_price(price, product.tasa_rentabilidad, product.volatilidad, bear_left, rng)
+            db.add(
+                InvestmentPriceHistory(
+                    producto_id=product.id,
+                    precio_kidos=round(price, 2),
+                    fecha=last + week_number * WEEK,
+                )
+            )
 
         product.precio_actual_kidos = round(price, 2)
         product.semanas_bajistas_restantes = bear_left

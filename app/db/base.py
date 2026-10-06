@@ -6,7 +6,8 @@ from app.models.account import Account  # noqa: F401
 from app.models.transaction import Transaction  # noqa: F401
 from app.models.goal import Goal  # noqa: F401
 from app.models.economy import InflationPolicy  # noqa: F401
-from app.models.investment import InvestmentProduct, UserInvestment, MarketNews  # noqa: F401
+from app.models.investment import InvestmentProduct, UserInvestment, MarketNews, InvestmentPriceHistory  # noqa: F401
+from app.models.task import Task  # noqa: F401
 from app.models.market import MarketItem, EscrowTransaction  # noqa: F401
 from app.models.password_reset import PasswordResetToken  # noqa: F401
 from app.models.bond import Bond, BondOffer  # noqa: F401

@@ -73,7 +73,7 @@ class MarketNewsCreate(BaseModel):
     titulo: str = Field(..., min_length=2, max_length=150)
     descripcion: str = Field(..., min_length=2, max_length=500)
     impacto_pct: float = Field(..., description="Impacto porcentual del evento sobre el valor del activo")
-    producto_id: int
+    producto_id: Optional[int] = None
 
 
 class MarketNewsResponse(BaseModel):
@@ -86,5 +86,14 @@ class MarketNewsResponse(BaseModel):
     precio_resultante: Optional[float] = None
     activo: bool
     created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvestmentPriceHistoryResponse(BaseModel):
+    id: int
+    producto_id: int
+    precio_kidos: float
+    fecha: datetime
 
     model_config = ConfigDict(from_attributes=True)

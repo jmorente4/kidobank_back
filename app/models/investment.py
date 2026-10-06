@@ -69,3 +69,14 @@ class MarketNews(Base):
     precio_resultante: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     activo: Mapped[bool] = mapped_column(default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class InvestmentPriceHistory(Base):
+    __tablename__ = "historial_precios_inversion"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    producto_id: Mapped[int] = mapped_column(
+        ForeignKey("productos_inversion.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    precio_kidos: Mapped[float] = mapped_column(Float, nullable=False)
+    fecha: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

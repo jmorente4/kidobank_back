@@ -29,15 +29,17 @@ def _latest_policy(db: Session) -> InflationPolicy | None:
     return db.scalars(select(InflationPolicy).order_by(InflationPolicy.id.desc())).first()
 
 
-@router.get("/inflation", response_model=InflationPolicyResponse, summary="Consultar la política semanal de inflación")
+@router.get(
+    "/inflation",
+    response_model=InflationPolicyResponse | None,
+    summary="Consultar la política semanal de inflación",
+    description="Devuelve la política configurada o null si todavía no existe ninguna.",
+)
 def get_inflation_policy(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    policy = _latest_policy(db)
-    if not policy:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Todavía no existe una política de inflación configurada")
-    return policy
+    return _latest_policy(db)
 
 
 @router.post("/inflation", response_model=InflationPolicyResponse, status_code=status.HTTP_201_CREATED, summary="Configurar la tasa semanal de inflación")

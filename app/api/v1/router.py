@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import accounts, auth, bonds, economy, goals, investment, market, transactions, users
+from app.api.v1.endpoints import accounts, auth, bonds, economy, goals, investment, market, tasks, transactions, users
 
 api_router = APIRouter()
 
@@ -65,4 +65,11 @@ api_router.include_router(
     market.router,
     prefix="/market",
     tags=["Mercadillo"]
+)
+
+# Tareas familiares y recompensas
+api_router.include_router(
+    tasks.router,
+    prefix="/tasks",
+    tags=["Tareas y recompensas"]
 )

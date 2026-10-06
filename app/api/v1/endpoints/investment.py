@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import can_access_user, get_current_parent, get_current_user, get_db
 from app.models.account import Account, AccountType
-from app.models.investment import InvestmentProduct, InvestmentStatus, InvestmentType, MarketNews, UserInvestment
+from app.models.investment import InvestmentPriceHistory, InvestmentProduct, InvestmentStatus, InvestmentType, MarketNews, UserInvestment
 from app.models.transaction import Transaction, TransactionStatus, TransactionType
 from app.models.user import User, UserRole
 from app.services.market_engine import apply_news_shock
@@ -15,6 +15,7 @@ from app.schemas.investment import (
     InvestmentProductCreate,
     InvestmentProductResponse,
     InvestmentPurchaseRequest,
+    InvestmentPriceHistoryResponse,
     MarketNewsCreate,
     MarketNewsResponse,
     SellInvestmentRequest,
@@ -60,9 +61,37 @@ def create_product(
         activo=True,
     )
     db.add(product)
+    db.flush()
+    db.add(
+        InvestmentPriceHistory(
+            producto_id=product.id,
+            precio_kidos=product.precio_actual_kidos,
+            fecha=product.ultima_simulacion,
+        )
+    )
     db.commit()
     db.refresh(product)
     return product
+
+
+@router.get(
+    "/products/{product_id}/history",
+    response_model=List[InvestmentPriceHistoryResponse],
+    summary="Consultar el histórico de precios de un activo",
+)
+def get_product_price_history(
+    product_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if db.get(InvestmentProduct, product_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Activo no encontrado")
+    stmt = (
+        select(InvestmentPriceHistory)
+        .where(InvestmentPriceHistory.producto_id == product_id)
+        .order_by(InvestmentPriceHistory.fecha.asc(), InvestmentPriceHistory.id.asc())
+    )
+    return db.scalars(stmt).all()
 
 
 @router.get("/products/{product_id}", response_model=InvestmentProductResponse, summary="Obtener detalle de un activo")
@@ -147,18 +176,42 @@ def create_market_news(
     current_parent: User = Depends(get_current_parent),
     db: Session = Depends(get_db),
 ):
-    product = db.get(InvestmentProduct, payload.producto_id)
-    if not product or product.tipo != InvestmentType.INDICE or not product.activo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Índice temático activo no encontrado")
-
     now = datetime.now(timezone.utc)
     run_market_updates(db, now=now)
-    precio_anterior, precio_resultante = apply_news_shock(product, payload.impacto_pct, now=now)
+
+    if payload.producto_id is None:
+        products = db.scalars(
+            select(InvestmentProduct)
+            .where(
+                InvestmentProduct.activo.is_(True),
+                InvestmentProduct.tipo == InvestmentType.INDICE,
+            )
+            .with_for_update()
+        ).all()
+    else:
+        product = db.get(InvestmentProduct, payload.producto_id)
+        if not product or product.tipo != InvestmentType.INDICE or not product.activo:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Índice temático activo no encontrado")
+        products = [product]
+
+    precio_anterior = precio_resultante = None
+    for product in products:
+        previous, resulting = apply_news_shock(product, payload.impacto_pct, now=now)
+        db.add(
+            InvestmentPriceHistory(
+                producto_id=product.id,
+                precio_kidos=resulting,
+                fecha=now,
+            )
+        )
+        if payload.producto_id is not None:
+            precio_anterior, precio_resultante = previous, resulting
+
     news = MarketNews(
         titulo=payload.titulo,
         descripcion=payload.descripcion,
         impacto_pct=payload.impacto_pct,
-        producto_id=product.id,
+        producto_id=payload.producto_id,
         precio_anterior=precio_anterior,
         precio_resultante=precio_resultante,
         activo=True,

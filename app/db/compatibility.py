@@ -87,7 +87,7 @@ def ensure_economy_columns(engine: Engine) -> None:
 
     if engine.dialect.name == "postgresql":
         with engine.begin() as connection:
-            for value in ("INVERSION", "DEPOSITO", "RETIRO", "INTERES"):
+            for value in ("INVERSION", "DEPOSITO", "RETIRO", "INTERES", "RECOMPENSA"):
                 connection.execute(text(f"ALTER TYPE transactiontype ADD VALUE IF NOT EXISTS '{value}'"))
 
     tables = set(inspect(engine).get_table_names())
@@ -113,6 +113,17 @@ def ensure_economy_columns(engine: Engine) -> None:
                     text("UPDATE productos_inversion SET ultima_simulacion = :now WHERE ultima_simulacion IS NULL"),
                     {"now": now},
                 )
+        if "productos_inversion" in tables and "historial_precios_inversion" in tables:
+            connection.execute(
+                text(
+                    "INSERT INTO historial_precios_inversion (producto_id, precio_kidos, fecha) "
+                    "SELECT p.id, p.precio_actual_kidos, p.updated_at "
+                    "FROM productos_inversion p "
+                    "WHERE NOT EXISTS ("
+                    "SELECT 1 FROM historial_precios_inversion h WHERE h.producto_id = p.id"
+                    ")"
+                )
+            )
         if "politicas_inflacion" in tables:
             columns = {column["name"] for column in inspect(connection).get_columns("politicas_inflacion")}
             if "tasa_mensual" in columns:

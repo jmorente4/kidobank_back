@@ -6,6 +6,10 @@ def test_politica_inflacion_padre(client, padre_user):
     token = login_res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
+    unconfigured_res = client.get("/api/v1/economy/inflation", headers=headers)
+    assert unconfigured_res.status_code == 200
+    assert unconfigured_res.json() is None
+
     create_res = client.post(
         "/api/v1/economy/inflation",
         json={"nombre": "Inflación familiar", "tasa_semanal": 0.02},
